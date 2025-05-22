@@ -2167,183 +2167,286 @@ class SuperXGBoost:
 
             return preprocessor
 
-        def prepare_data(self, X, y=None, test_size=0.2, val_size=None, stratify=True,
-                         preprocessing=True, feature_engineering=False, feature_selection=False,
-                         handle_outliers=False, handle_imbalance=False, return_test=True):
-            """
-            全面的数据准备
+    def prepare_data(self, X, y=None, test_size=0.2, val_size=None, stratify=True,
+                     preprocessing=True, feature_engineering=False, feature_selection=False,
+                     handle_outliers=False, handle_imbalance=False, return_test=True):
+        """
+        全面的数据准备
 
-            参数:
-                X: 特征数据
-                y: 目标变量
-                test_size: 测试集大小比例
-                val_size: 验证集大小比例
-                stratify: 是否使用分层抽样
-                preprocessing: 是否应用预处理
-                feature_engineering: 是否应用特征工程
-                feature_selection: 是否应用特征选择
-                handle_outliers: 是否处理异常值
-                handle_imbalance: 是否处理类别不平衡
-                return_test: 是否返回测试集
+        参数:
+            X: 特征数据
+            y: 目标变量
+            test_size: 测试集大小比例
+            val_size: 验证集大小比例
+            stratify: 是否使用分层抽样
+            preprocessing: 是否应用预处理
+            feature_engineering: 是否应用特征工程
+            feature_selection: 是否应用特征选择
+            handle_outliers: 是否处理异常值
+            handle_imbalance: 是否处理类别不平衡
+            return_test: 是否返回测试集
 
-            返回:
-                处理后的数据集
-            """
+        返回:
+            处理后的数据集
+        """
+        if self.verbose > 0:
+            logger.info("开始全面数据准备流程...")
+
+        # 转换为DataFrame
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+
+        # 转换目标变量
+        if y is not None and not isinstance(y, pd.Series):
+            y = pd.Series(y, name='target')
+
+        # 保存原始数据
+        X_orig = X.copy()
+
+        # 1. 数据分析
+        self.profile_data(X, y)
+
+        # 2. 处理异常值
+        if handle_outliers:
+            X = self.detect_and_handle_outliers(X, method='iqr', treatment='clip')
+
+        # 3. 特征工程
+        if feature_engineering:
+            X = self.engineer_features(X, y, drop_original=False)
+
+        # 4. 划分训练集和测试集
+        if y is not None and return_test:
             if self.verbose > 0:
-                logger.info("开始全面数据准备流程...")
+                logger.info(f"划分数据集: test_size={test_size}, val_size={val_size}")
 
-            # 转换为DataFrame
-            if not isinstance(X, pd.DataFrame):
-                X = pd.DataFrame(X)
+            # 确定是否使用分层抽样
+            stratify_param = None
+            if stratify and self.task_type == 'classification':
+                stratify_param = y
 
-            # 转换目标变量
-            if y is not None and not isinstance(y, pd.Series):
-                y = pd.Series(y, name='target')
+            # 划分训练集和测试集
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=test_size,
+                stratify=stratify_param,
+                random_state=self.random_state
+            )
 
-            # 保存原始数据
-            X_orig = X.copy()
-
-            # 1. 数据分析
-            self.profile_data(X, y)
-
-            # 2. 处理异常值
-            if handle_outliers:
-                X = self.detect_and_handle_outliers(X, method='iqr', treatment='clip')
-
-            # 3. 特征工程
-            if feature_engineering:
-                X = self.engineer_features(X, y, drop_original=False)
-
-            # 4. 划分训练集和测试集
-            if y is not None and return_test:
-                if self.verbose > 0:
-                    logger.info(f"划分数据集: test_size={test_size}, val_size={val_size}")
+            # 如果需要验证集，进一步划分
+            if val_size is not None:
+                # 根据原始大小计算验证集比例
+                val_ratio = val_size / (1 - test_size)
 
                 # 确定是否使用分层抽样
-                stratify_param = None
+                stratify_val = None
                 if stratify and self.task_type == 'classification':
-                    stratify_param = y
+                    stratify_val = y_train
 
-                # 划分训练集和测试集
-                X_train, X_test, y_train, y_test = train_test_split(
-                    X, y, test_size=test_size,
-                    stratify=stratify_param,
+                # 划分训练集和验证集
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X_train, y_train, test_size=val_ratio,
+                    stratify=stratify_val,
                     random_state=self.random_state
                 )
 
-                # 如果需要验证集，进一步划分
-                if val_size is not None:
-                    # 根据原始大小计算验证集比例
-                    val_ratio = val_size / (1 - test_size)
-
-                    # 确定是否使用分层抽样
-                    stratify_val = None
-                    if stratify and self.task_type == 'classification':
-                        stratify_val = y_train
-
-                    # 划分训练集和验证集
-                    X_train, X_val, y_train, y_val = train_test_split(
-                        X_train, y_train, test_size=val_ratio,
-                        stratify=stratify_val,
-                        random_state=self.random_state
-                    )
-
-                    if self.verbose > 0:
-                        logger.info(
-                            f"数据集划分: 训练集={len(X_train)}样本, 验证集={len(X_val)}样本, 测试集={len(X_test)}样本")
-                else:
-                    X_val, y_val = None, None
-
-                    if self.verbose > 0:
-                        logger.info(f"数据集划分: 训练集={len(X_train)}样本, 测试集={len(X_test)}样本")
+                if self.verbose > 0:
+                    logger.info(
+                        f"数据集划分: 训练集={len(X_train)}样本, 验证集={len(X_val)}样本, 测试集={len(X_test)}样本")
             else:
-                # 没有划分
-                X_train, y_train = X, y
-                X_test, y_test = None, None
                 X_val, y_val = None, None
 
-            # 5. 处理类别不平衡
-            if handle_imbalance and y_train is not None and self.task_type == 'classification':
                 if self.verbose > 0:
-                    logger.info("处理类别不平衡...")
+                    logger.info(f"数据集划分: 训练集={len(X_train)}样本, 测试集={len(X_test)}样本")
+        else:
+            # 没有划分
+            X_train, y_train = X, y
+            X_test, y_test = None, None
+            X_val, y_val = None, None
 
-                # 计算类别权重
-                classes = np.unique(y_train)
-                class_weights = compute_class_weight(
-                    class_weight='balanced',
-                    classes=classes,
-                    y=y_train
-                )
+        # 5. 处理类别不平衡
+        if handle_imbalance and y_train is not None and self.task_type == 'classification':
+            if self.verbose > 0:
+                logger.info("处理类别不平衡...")
 
-                # 创建权重字典
-                self.class_weights = dict(zip(classes, class_weights))
+            # 计算类别权重
+            classes = np.unique(y_train)
+            class_weights = compute_class_weight(
+                class_weight='balanced',
+                classes=classes,
+                y=y_train
+            )
 
-                # 更新模型参数
-                if len(classes) == 2:
-                    # 二分类：使用scale_pos_weight
-                    neg_count = np.sum(y_train == 0)
-                    pos_count = np.sum(y_train == 1)
+            # 创建权重字典
+            self.class_weights = dict(zip(classes, class_weights))
 
-                    if pos_count > 0:
-                        self.params['scale_pos_weight'] = neg_count / pos_count
+            # 更新模型参数
+            if len(classes) == 2:
+                # 二分类：使用scale_pos_weight
+                neg_count = np.sum(y_train == 0)
+                pos_count = np.sum(y_train == 1)
 
-                        if self.verbose > 0:
-                            logger.info(f"设置scale_pos_weight={self.params['scale_pos_weight']:.4f}")
-                else:
-                    # 多分类：使用XGBoost的weight参数
-                    self.sample_weights = np.ones(len(y_train))
-                    for i, cls in enumerate(y_train):
-                        self.sample_weights[i] = self.class_weights[cls]
+                if pos_count > 0:
+                    self.params['scale_pos_weight'] = neg_count / pos_count
 
                     if self.verbose > 0:
-                        logger.info(f"创建样本权重向量，类别权重: {self.class_weights}")
-
-            # 6. 特征选择
-            if feature_selection and y_train is not None:
-                if self.verbose > 0:
-                    logger.info("执行特征选择...")
-
-                X_train, selected_features = self.select_features(X_train, y_train, method='auto')
-
-                # 更新测试集和验证集
-                if X_test is not None:
-                    X_test = X_test[selected_features]
-
-                if X_val is not None:
-                    X_val = X_val[selected_features]
+                        logger.info(f"设置scale_pos_weight={self.params['scale_pos_weight']:.4f}")
+            else:
+                # 多分类：使用XGBoost的weight参数
+                self.sample_weights = np.ones(len(y_train))
+                for i, cls in enumerate(y_train):
+                    self.sample_weights[i] = self.class_weights[cls]
 
                 if self.verbose > 0:
-                    logger.info(f"特征选择完成，保留 {len(selected_features)} 个特征")
+                    logger.info(f"创建样本权重向量，类别权重: {self.class_weights}")
 
-            # 7. 预处理
-            if preprocessing:
-                if self.verbose > 0:
-                    logger.info("应用预处理转换...")
+        # 6. 特征选择
+        if feature_selection and y_train is not None:
+            if self.verbose > 0:
+                logger.info("执行特征选择...")
 
-                # 创建预处理管道
-                if self.pipeline is None:
-                    self.create_preprocessing_pipeline()
+            X_train, selected_features = self.select_features(X_train, y_train, method='auto')
+
+            # 更新测试集和验证集
+            if X_test is not None:
+                X_test = X_test[selected_features]
+
+            if X_val is not None:
+                X_val = X_val[selected_features]
+
+            if self.verbose > 0:
+                logger.info(f"特征选择完成，保留 {len(selected_features)} 个特征")
+
+        # 7. 预处理 - 修复版本，处理特征工程后的列名变化问题
+        if preprocessing:
+            if self.verbose > 0:
+                logger.info("应用预处理转换...")
+
+            try:
+                # 如果进行了特征工程或特征选择，需要重新分析当前的特征类型
+                if feature_engineering or feature_selection:
+                    if self.verbose > 1:
+                        logger.debug("重新分析特征类型（因为进行了特征工程或特征选择）...")
+
+                    # 临时保存原始特征信息
+                    original_categorical_features = self.categorical_features.copy()
+                    original_numerical_features = self.numerical_features.copy()
+                    original_text_features = self.text_features.copy()
+                    original_datetime_features = self.datetime_features.copy()
+
+                    # 重新分析当前数据的特征类型
+                    current_numerical_features = []
+                    current_categorical_features = []
+                    current_text_features = []
+                    current_datetime_features = []
+
+                    for col in X_train.columns:
+                        if pd.api.types.is_numeric_dtype(X_train[col]):
+                            # 检查是否是伪装的分类特征
+                            unique_count = X_train[col].nunique()
+                            if unique_count < 20 or (unique_count < 100 and unique_count / len(X_train) < 0.05):
+                                current_categorical_features.append(col)
+                            else:
+                                current_numerical_features.append(col)
+                        elif pd.api.types.is_datetime64_dtype(X_train[col]):
+                            current_datetime_features.append(col)
+                        elif pd.api.types.is_categorical_dtype(X_train[col]) or pd.api.types.is_object_dtype(
+                                X_train[col]):
+                            # 判断是文本还是分类
+                            unique_count = X_train[col].nunique()
+                            if unique_count <= 1000:
+                                current_categorical_features.append(col)
+                            else:
+                                current_text_features.append(col)
+
+                    # 使用当前特征信息创建预处理管道
+                    self.create_preprocessing_pipeline(
+                        categorical_cols=current_categorical_features,
+                        numerical_cols=current_numerical_features,
+                        text_cols=current_text_features,
+                        date_cols=current_datetime_features
+                    )
+
+                    if self.verbose > 1:
+                        logger.debug(f"当前特征类型 - 数值: {len(current_numerical_features)}, "
+                                     f"分类: {len(current_categorical_features)}, "
+                                     f"文本: {len(current_text_features)}, "
+                                     f"日期: {len(current_datetime_features)}")
+                else:
+                    # 没有特征工程，使用原始的预处理管道
+                    if self.pipeline is None:
+                        self.create_preprocessing_pipeline()
 
                 # 应用预处理
-                X_train_processed = pd.DataFrame(
-                    self.pipeline.fit_transform(X_train, y_train),
-                    index=X_train.index
-                )
+                X_train_processed = self.pipeline.fit_transform(X_train, y_train)
+
+                # 处理预处理后的列名
+                if hasattr(self.pipeline, 'get_feature_names_out'):
+                    try:
+                        # 尝试获取输出特征名称
+                        feature_names_out = self.pipeline.get_feature_names_out()
+                        X_train_processed = pd.DataFrame(
+                            X_train_processed,
+                            columns=feature_names_out,
+                            index=X_train.index
+                        )
+                    except:
+                        # 如果获取特征名失败，使用默认名称
+                        X_train_processed = pd.DataFrame(
+                            X_train_processed,
+                            index=X_train.index
+                        )
+                else:
+                    # 转换为DataFrame
+                    X_train_processed = pd.DataFrame(
+                        X_train_processed,
+                        index=X_train.index
+                    )
 
                 # 更新测试集和验证集
                 if X_test is not None:
-                    X_test_processed = pd.DataFrame(
-                        self.pipeline.transform(X_test),
-                        index=X_test.index
-                    )
+                    X_test_processed = self.pipeline.transform(X_test)
+
+                    if hasattr(self.pipeline, 'get_feature_names_out'):
+                        try:
+                            feature_names_out = self.pipeline.get_feature_names_out()
+                            X_test_processed = pd.DataFrame(
+                                X_test_processed,
+                                columns=feature_names_out,
+                                index=X_test.index
+                            )
+                        except:
+                            X_test_processed = pd.DataFrame(
+                                X_test_processed,
+                                index=X_test.index
+                            )
+                    else:
+                        X_test_processed = pd.DataFrame(
+                            X_test_processed,
+                            index=X_test.index
+                        )
                 else:
                     X_test_processed = None
 
                 if X_val is not None:
-                    X_val_processed = pd.DataFrame(
-                        self.pipeline.transform(X_val),
-                        index=X_val.index
-                    )
+                    X_val_processed = self.pipeline.transform(X_val)
+
+                    if hasattr(self.pipeline, 'get_feature_names_out'):
+                        try:
+                            feature_names_out = self.pipeline.get_feature_names_out()
+                            X_val_processed = pd.DataFrame(
+                                X_val_processed,
+                                columns=feature_names_out,
+                                index=X_val.index
+                            )
+                        except:
+                            X_val_processed = pd.DataFrame(
+                                X_val_processed,
+                                index=X_val.index
+                            )
+                    else:
+                        X_val_processed = pd.DataFrame(
+                            X_val_processed,
+                            index=X_val.index
+                        )
                 else:
                     X_val_processed = None
 
@@ -2355,194 +2458,207 @@ class SuperXGBoost:
                 if self.verbose > 0:
                     logger.info(f"预处理完成，转换后特征数量: {X_train.shape[1]}")
 
-            # 保存处理后的训练数据
-            self.orig_train_data = X_orig
-            self.train_data = X_train
+                # 如果修改了特征信息，恢复原始信息（保持对象状态一致）
+                if feature_engineering or feature_selection:
+                    self.categorical_features = original_categorical_features
+                    self.numerical_features = original_numerical_features
+                    self.text_features = original_text_features
+                    self.datetime_features = original_datetime_features
 
-            # 返回处理后的数据
-            if X_val is not None and return_test:
-                return X_train, X_val, X_test, y_train, y_val, y_test
-            elif return_test:
-                return X_train, X_test, y_train, y_test
-            else:
-                return X_train, y_train
-
-        def fit(self, X, y, eval_set=None, sample_weight=None, early_stopping_rounds=None,
-                feature_names=None, categorical_features=None, enable_categorical=False,
-                callbacks=None):
-            """
-            训练XGBoost模型
-
-            参数:
-                X: 训练特征
-                y: 目标变量
-                eval_set: 评估集，用于早停
-                sample_weight: 样本权重
-                early_stopping_rounds: 早停轮数
-                feature_names: 特征名称
-                categorical_features: 分类特征索引
-                enable_categorical: 是否启用分类特征原生支持
-                callbacks: 回调函数列表
-
-            返回:
-                self: 当前对象实例
-            """
-            if self.verbose > 0:
-                logger.info("开始训练XGBoost模型...")
-
-            # 初始化MLflow跟踪
-            if self.experiment_tracking and mlflow.active_run() is None:
-                mlflow.start_run()
-
-                # 记录参数
-                for param_name, param_value in self.params.items():
-                    mlflow.log_param(param_name, param_value)
-
-            # 检查数据类型并转换
-            if isinstance(X, pd.DataFrame):
-                if feature_names is None:
-                    feature_names = X.columns.tolist()
-
-                # 确定分类特征
-                if categorical_features is None and enable_categorical:
-                    categorical_features = []
-                    for i, col in enumerate(X.columns):
-                        if col in self.categorical_features or pd.api.types.is_categorical_dtype(X[col]):
-                            categorical_features.append(i)
-
-                X_values = X.values
-            else:
-                X_values = X
-
-            if isinstance(y, pd.Series):
-                y_values = y.values
-            else:
-                y_values = y
-
-            # 更新参数
-            params = self.params.copy()
-
-            # 启用分类特征处理
-            if enable_categorical and categorical_features:
+            except Exception as e:
                 if self.verbose > 0:
-                    logger.info(f"启用原生分类特征支持，{len(categorical_features)}个分类特征")
+                    logger.warning(f"预处理失败: {e}")
+                    logger.warning("跳过预处理步骤，使用原始数据继续...")
 
-                params['enable_categorical'] = True
+                # 预处理失败时，继续使用未预处理的数据
+                # 这样确保数据准备流程不会完全中断
+                pass
 
-            # 创建DMatrix
-            dtrain = xgb.DMatrix(
-                data=X_values,
-                label=y_values,
-                weight=sample_weight,
-                feature_names=feature_names,
-                enable_categorical=enable_categorical
-            )
+        # 保存处理后的训练数据
+        self.orig_train_data = X_orig
+        self.train_data = X_train
 
-            # 准备验证集
-            evals = [(dtrain, 'train')]
-            if eval_set is not None:
-                for i, (X_eval, y_eval) in enumerate(eval_set):
-                    if isinstance(X_eval, pd.DataFrame):
-                        X_eval = X_eval.values
+        # 返回处理后的数据
+        if X_val is not None and return_test:
+            return X_train, X_val, X_test, y_train, y_val, y_test
+        elif return_test:
+            return X_train, X_test, y_train, y_test
+        else:
+            return X_train, y_train
 
-                    if isinstance(y_eval, pd.Series):
-                        y_eval = y_eval.values
+    def fit(self, X, y, eval_set=None, sample_weight=None, early_stopping_rounds=None,
+            feature_names=None, categorical_features=None, enable_categorical=False,
+            callbacks=None):
+        """
+        训练XGBoost模型
 
-                    # 创建评估DMatrix
-                    deval = xgb.DMatrix(
-                        data=X_eval,
-                        label=y_eval,
-                        feature_names=feature_names,
-                        enable_categorical=enable_categorical
-                    )
+        参数:
+            X: 训练特征
+            y: 目标变量
+            eval_set: 评估集，用于早停
+            sample_weight: 样本权重
+            early_stopping_rounds: 早停轮数
+            feature_names: 特征名称
+            categorical_features: 分类特征索引
+            enable_categorical: 是否启用分类特征原生支持
+            callbacks: 回调函数列表
 
-                    evals.append((deval, f'eval_{i}'))
+        返回:
+            self: 当前对象实例
+        """
+        if self.verbose > 0:
+            logger.info("开始训练XGBoost模型...")
 
-            # 准备回调
-            if callbacks is None:
-                callbacks = []
+        # 初始化MLflow跟踪
+        if self.experiment_tracking and mlflow.active_run() is None:
+            mlflow.start_run()
 
-            # 添加预定义回调
-            if self.experiment_tracking:
-                # MLflow回调
-                class MLflowCallback(xgb.callback.TrainingCallback):
-                    def after_iteration(self, model, epoch, evals_log):
-                        for eval_name, eval_metric in evals_log.items():
-                            for metric_name, metric_values in eval_metric.items():
-                                mlflow.log_metric(
-                                    f"{eval_name}_{metric_name}",
-                                    metric_values[-1],
-                                    step=epoch
-                                )
-                        return False
+            # 记录参数
+            for param_name, param_value in self.params.items():
+                mlflow.log_param(param_name, param_value)
 
-                callbacks.append(MLflowCallback())
+        # 检查数据类型并转换
+        if isinstance(X, pd.DataFrame):
+            if feature_names is None:
+                feature_names = X.columns.tolist()
 
-            # 设置适当的评估指标
-            if 'eval_metric' not in params:
-                if self.task_type == 'classification':
-                    if 'multi' in self.objective:
-                        params['eval_metric'] = ['mlogloss', 'merror']
-                    else:
-                        params['eval_metric'] = ['logloss', 'auc', 'error']
+            # 确定分类特征
+            if categorical_features is None and enable_categorical:
+                categorical_features = []
+                for i, col in enumerate(X.columns):
+                    if col in self.categorical_features or pd.api.types.is_categorical_dtype(X[col]):
+                        categorical_features.append(i)
+
+            X_values = X.values
+        else:
+            X_values = X
+
+        if isinstance(y, pd.Series):
+            y_values = y.values
+        else:
+            y_values = y
+
+        # 更新参数
+        params = self.params.copy()
+
+        # 【修复1】对于多分类问题，自动设置num_class参数
+        if self.task_type == 'classification' and 'multi' in self.objective:
+            unique_classes = np.unique(y_values)
+            num_classes = len(unique_classes)
+            params['num_class'] = num_classes
+
+            if self.verbose > 0:
+                logger.info(f"检测到多分类问题，设置num_class={num_classes}，类别: {unique_classes}")
+
+        # 启用分类特征处理
+        if enable_categorical and categorical_features:
+            if self.verbose > 0:
+                logger.info(f"启用原生分类特征支持，{len(categorical_features)}个分类特征")
+
+            params['enable_categorical'] = True
+
+        # 创建DMatrix
+        dtrain = xgb.DMatrix(
+            data=X_values,
+            label=y_values,
+            weight=sample_weight,
+            feature_names=feature_names,
+            enable_categorical=enable_categorical
+        )
+
+        # 准备验证集
+        evals = [(dtrain, 'train')]
+        if eval_set is not None:
+            for i, (X_eval, y_eval) in enumerate(eval_set):
+                if isinstance(X_eval, pd.DataFrame):
+                    X_eval = X_eval.values
+
+                if isinstance(y_eval, pd.Series):
+                    y_eval = y_eval.values
+
+                # 创建评估DMatrix
+                deval = xgb.DMatrix(
+                    data=X_eval,
+                    label=y_eval,
+                    feature_names=feature_names,
+                    enable_categorical=enable_categorical
+                )
+
+                evals.append((deval, f'eval_{i}'))
+
+        # 准备回调
+        if callbacks is None:
+            callbacks = []
+
+        # 添加预定义回调
+        if self.experiment_tracking:
+            # MLflow回调
+            class MLflowCallback(xgb.callback.TrainingCallback):
+                def after_iteration(self, model, epoch, evals_log):
+                    for eval_name, eval_metric in evals_log.items():
+                        for metric_name, metric_values in eval_metric.items():
+                            mlflow.log_metric(
+                                f"{eval_name}_{metric_name}",
+                                metric_values[-1],
+                                step=epoch
+                            )
+                    return False
+
+            callbacks.append(MLflowCallback())
+
+        # 设置适当的评估指标
+        if 'eval_metric' not in params:
+            if self.task_type == 'classification':
+                if 'multi' in self.objective:
+                    params['eval_metric'] = ['mlogloss', 'merror']
                 else:
-                    params['eval_metric'] = ['rmse', 'mae']
-
-            # 训练模型
-            self.training_history = {}
-
-            start_time = time.time()
-
-            if self.verbose > 0:
-                logger.info(
-                    f"开始训练: {params.get('n_estimators', 100)}棵树, learning_rate={params.get('learning_rate', 0.1)}")
-
-            # 检查分布式训练
-            if self.distributed:
-                if self.verbose > 0:
-                    logger.info("使用分布式训练")
-
-                # 使用Dask进行分布式训练
-                try:
-                    import dask_xgboost as dxgb
-                    import dask.array as da
-
-                    # 转换为Dask数组
-                    if isinstance(X_values, np.ndarray):
-                        X_dask = da.from_array(X_values, chunks='auto')
-                        y_dask = da.from_array(y_values, chunks='auto')
-                    else:
-                        X_dask = X_values
-                        y_dask = y_values
-
-                    # 分布式训练
-                    self.model = dxgb.train(
-                        client=None,  # 使用当前客户端
-                        params=params,
-                        dtrain=(X_dask, y_dask),
-                        num_boost_round=params.get('n_estimators', 100),
-                        evals=evals,
-                        early_stopping_rounds=early_stopping_rounds,
-                        callbacks=callbacks,
-                        verbose_eval=self.verbose > 0
-                    )
-                except Exception as e:
-                    logger.warning(f"分布式训练失败: {e}. 回退到标准训练。")
-                    self.distributed = False
-
-                    # 回退到标准训练
-                    self.model = xgb.train(
-                        params=params,
-                        dtrain=dtrain,
-                        num_boost_round=params.get('n_estimators', 100),
-                        evals=evals,
-                        early_stopping_rounds=early_stopping_rounds,
-                        evals_result=self.training_history,
-                        callbacks=callbacks,
-                        verbose_eval=self.verbose > 0
-                    )
+                    params['eval_metric'] = ['logloss', 'auc', 'error']
             else:
-                # 标准训练
+                params['eval_metric'] = ['rmse', 'mae']
+
+        # 训练模型
+        self.training_history = {}
+
+        start_time = time.time()
+
+        if self.verbose > 0:
+            logger.info(
+                f"开始训练: {params.get('n_estimators', 100)}棵树, learning_rate={params.get('learning_rate', 0.1)}")
+
+        # 检查分布式训练
+        if self.distributed:
+            if self.verbose > 0:
+                logger.info("使用分布式训练")
+
+            # 使用Dask进行分布式训练
+            try:
+                import dask_xgboost as dxgb
+                import dask.array as da
+
+                # 转换为Dask数组
+                if isinstance(X_values, np.ndarray):
+                    X_dask = da.from_array(X_values, chunks='auto')
+                    y_dask = da.from_array(y_values, chunks='auto')
+                else:
+                    X_dask = X_values
+                    y_dask = y_values
+
+                # 分布式训练
+                self.model = dxgb.train(
+                    client=None,  # 使用当前客户端
+                    params=params,
+                    dtrain=(X_dask, y_dask),
+                    num_boost_round=params.get('n_estimators', 100),
+                    evals=evals,
+                    early_stopping_rounds=early_stopping_rounds,
+                    callbacks=callbacks,
+                    verbose_eval=self.verbose > 0
+                )
+            except Exception as e:
+                logger.warning(f"分布式训练失败: {e}. 回退到标准训练。")
+                self.distributed = False
+
+                # 回退到标准训练
                 self.model = xgb.train(
                     params=params,
                     dtrain=dtrain,
@@ -2553,1076 +2669,966 @@ class SuperXGBoost:
                     callbacks=callbacks,
                     verbose_eval=self.verbose > 0
                 )
+        else:
+            # 标准训练
+            self.model = xgb.train(
+                params=params,
+                dtrain=dtrain,
+                num_boost_round=params.get('n_estimators', 100),
+                evals=evals,
+                early_stopping_rounds=early_stopping_rounds,
+                evals_result=self.training_history,
+                callbacks=callbacks,
+                verbose_eval=self.verbose > 0
+            )
 
-            # 计算训练时间
-            train_time = time.time() - start_time
+        # 计算训练时间
+        train_time = time.time() - start_time
 
-            # 保存特征名称
-            self.feature_names = feature_names
+        # 保存特征名称
+        self.feature_names = feature_names
 
-            # 获取特征重要性
-            try:
-                self.feature_importances = self.model.get_score(importance_type='gain')
-            except:
-                self.feature_importances = {}
-                if self.verbose > 0:
-                    logger.warning("无法获取特征重要性")
+        # 获取特征重要性
+        try:
+            self.feature_importances = self.model.get_score(importance_type='gain')
+        except:
+            self.feature_importances = {}
+            if self.verbose > 0:
+                logger.warning("无法获取特征重要性")
 
-            # 记录训练后的指标
-            if self.experiment_tracking:
-                mlflow.log_metric("training_time", train_time)
+        # 记录训练后的指标
+        if self.experiment_tracking:
+            mlflow.log_metric("training_time", train_time)
 
-                # 记录特征重要性
-                if self.feature_importances:
-                    # 记录图表
-                    fig = self.plot_feature_importance(plot=False)
+            # 记录特征重要性
+            if self.feature_importances:
+                # 【修复2】记录图表 - 移除plot=False参数
+                try:
+                    fig = self.plot_feature_importance()
                     mlflow.log_figure(fig, "feature_importance.png")
                     plt.close(fig)
+                except Exception as e:
+                    if self.verbose > 0:
+                        logger.warning(f"记录特征重要性图表失败: {e}")
 
-                    # 记录重要性值
-                    for feature, importance in self.feature_importances.items():
-                        mlflow.log_metric(f"importance_{feature}", importance)
+                # 记录重要性值
+                for feature, importance in self.feature_importances.items():
+                    mlflow.log_metric(f"importance_{feature}", importance)
 
-            if self.verbose > 0:
-                logger.info(f"模型训练完成，用时 {train_time:.2f} 秒")
+        if self.verbose > 0:
+            logger.info(f"模型训练完成，用时 {train_time:.2f} 秒")
 
-                if early_stopping_rounds is not None and hasattr(self.model, 'best_iteration'):
-                    logger.info(f"最佳迭代次数: {self.model.best_iteration}")
+            if early_stopping_rounds is not None and hasattr(self.model, 'best_iteration'):
+                logger.info(f"最佳迭代次数: {self.model.best_iteration}")
 
-                if self.feature_importances:
-                    top_features = sorted(
-                        self.feature_importances.items(),
-                        key=lambda x: x[1],
-                        reverse=True
-                    )[:5]
+            if self.feature_importances:
+                top_features = sorted(
+                    self.feature_importances.items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )[:5]
 
-                    logger.info("前5个重要特征:")
-                    for feature, importance in top_features:
-                        logger.info(f"  - {feature}: {importance:.4f}")
+                logger.info("前5个重要特征:")
+                for feature, importance in top_features:
+                    logger.info(f"  - {feature}: {importance:.4f}")
 
-            return self
+        return self
 
-        def predict(self, X, threshold=0.5, ntree_limit=None):
-            """
+    def predict(self, X, threshold=0.5, ntree_limit=None, apply_preprocessing=None):
+        """
+        预测结果
+
+        参数:
+            X: 特征数据
+            threshold: 分类阈值，仅用于二分类问题
+            ntree_limit: 限制使用的树数量
+            apply_preprocessing: 是否应用预处理，None表示自动判断
+
+        返回:
             预测结果
+        """
+        if self.model is None:
+            raise ValueError("模型尚未训练，请先调用fit方法")
 
-            参数:
-                X: 特征数据
-                threshold: 分类阈值，仅用于二分类问题
-                ntree_limit: 限制使用的树数量
-
-            返回:
-                预测结果
-            """
-            if self.model is None:
-                raise ValueError("模型尚未训练，请先调用fit方法")
-
-            # 检查并转换特征数据
-            if isinstance(X, pd.DataFrame):
-                # 检查是否需要应用预处理
+        # 检查并转换特征数据
+        if isinstance(X, pd.DataFrame):
+            # 智能判断是否需要预处理
+            if apply_preprocessing is None:
+                # 自动判断：如果列名包含预处理后的特征名（如"num__"前缀），则不需要预处理
+                needs_preprocessing = True
                 if self.pipeline is not None:
-                    X_processed = self.pipeline.transform(X)
+                    # 检查是否包含预处理后的列名模式
+                    sample_columns = list(X.columns)[:5]  # 检查前5列
+                    preprocessed_patterns = ['num__', 'cat__', 'text__', 'date__']
+
+                    for col in sample_columns:
+                        if any(pattern in str(col) for pattern in preprocessed_patterns):
+                            needs_preprocessing = False
+                            break
+
+                    # 或者检查列数是否匹配训练时的特征数
+                    if hasattr(self, 'train_data') and self.train_data is not None:
+                        if X.shape[1] == self.train_data.shape[1]:
+                            needs_preprocessing = False
                 else:
+                    needs_preprocessing = False
+            else:
+                needs_preprocessing = apply_preprocessing
+
+            # 应用预处理（如果需要）
+            if needs_preprocessing and self.pipeline is not None:
+                try:
+                    X_processed = self.pipeline.transform(X)
+                    if self.verbose > 1:
+                        logger.debug("对输入数据应用了预处理")
+                except Exception as e:
+                    if self.verbose > 0:
+                        logger.warning(f"预处理失败: {e}，使用原始数据")
                     X_processed = X.values
             else:
-                X_processed = X
+                X_processed = X.values
+        else:
+            X_processed = X
 
-            # 创建DMatrix
-            dtest = xgb.DMatrix(X_processed, feature_names=self.feature_names)
+        # 创建DMatrix
+        dtest = xgb.DMatrix(X_processed, feature_names=self.feature_names)
 
-            # 获取原始预测
-            raw_preds = self.model.predict(dtest, ntree_limit=ntree_limit)
-
-            # 处理预测结果
-            if self.task_type == 'classification':
-                if 'multi' in self.objective:
-                    # 多分类：返回类别索引
-                    return np.argmax(raw_preds, axis=1)
-                else:
-                    # 二分类：应用阈值
-                    return (raw_preds > threshold).astype(int)
+        # 获取原始预测 - 处理不同版本的XGBoost参数兼容性
+        try:
+            if ntree_limit is not None:
+                # 尝试使用新版本的参数名
+                raw_preds = self.model.predict(dtest, iteration_range=(0, ntree_limit))
             else:
-                # 回归：直接返回预测值
-                return raw_preds
-
-        def predict_proba(self, X, ntree_limit=None):
-            """
-            预测概率（仅用于分类问题）
-
-            参数:
-                X: 特征数据
-                ntree_limit: 限制使用的树数量
-
-            返回:
-                预测概率
-            """
-            if self.task_type != 'classification':
-                raise ValueError("predict_proba只适用于分类任务")
-
-            if self.model is None:
-                raise ValueError("模型尚未训练，请先调用fit方法")
-
-            # 检查并转换特征数据
-            if isinstance(X, pd.DataFrame):
-                # 检查是否需要应用预处理
-                if self.pipeline is not None:
-                    X_processed = self.pipeline.transform(X)
+                raw_preds = self.model.predict(dtest)
+        except TypeError:
+            try:
+                # 回退到旧版本的参数名
+                if ntree_limit is not None:
+                    raw_preds = self.model.predict(dtest, ntree_limit=ntree_limit)
                 else:
+                    raw_preds = self.model.predict(dtest)
+            except TypeError:
+                # 如果都不行，就不使用限制参数
+                raw_preds = self.model.predict(dtest)
+
+        # 处理预测结果
+        if self.task_type == 'classification':
+            if 'multi' in self.objective:
+                # 多分类：返回类别索引
+                return np.argmax(raw_preds, axis=1)
+            else:
+                # 二分类：应用阈值
+                return (raw_preds > threshold).astype(int)
+        else:
+            # 回归：直接返回预测值
+            return raw_preds
+
+    def predict_proba(self, X, ntree_limit=None, apply_preprocessing=None):
+        """
+        预测概率（仅用于分类问题）- 最小化修复版本
+
+        参数:
+            X: 特征数据
+            ntree_limit: 限制使用的树数量
+            apply_preprocessing: 是否应用预处理，None表示自动判断
+
+        返回:
+            预测概率
+        """
+        if self.task_type != 'classification':
+            raise ValueError("predict_proba只适用于分类任务")
+
+        if self.model is None:
+            raise ValueError("模型尚未训练，请先调用fit方法")
+
+        # 【修复】检查params和objective属性
+        if not hasattr(self, 'params'):
+            if hasattr(self, 'default_params'):
+                self.params = self.default_params.copy()
+            else:
+                self.params = {
+                    'objective': getattr(self, 'objective', 'binary:logistic'),
+                    'random_state': getattr(self, 'random_state', 42)
+                }
+
+        if not hasattr(self, 'objective'):
+            self.objective = self.params.get('objective', 'binary:logistic')
+
+        # 检查并转换特征数据
+        if isinstance(X, pd.DataFrame):
+            # 智能判断是否需要预处理
+            if apply_preprocessing is None:
+                # 自动判断：如果列名包含预处理后的特征名（如"num__"前缀），则不需要预处理
+                needs_preprocessing = True
+                if hasattr(self, 'pipeline') and self.pipeline is not None:
+                    # 检查是否包含预处理后的列名模式
+                    sample_columns = list(X.columns)[:5]  # 检查前5列
+                    preprocessed_patterns = ['num__', 'cat__', 'text__', 'date__']
+
+                    for col in sample_columns:
+                        if any(pattern in str(col) for pattern in preprocessed_patterns):
+                            needs_preprocessing = False
+                            break
+
+                    # 或者检查列数是否匹配训练时的特征数
+                    if hasattr(self, 'train_data') and self.train_data is not None:
+                        if X.shape[1] == self.train_data.shape[1]:
+                            needs_preprocessing = False
+                else:
+                    needs_preprocessing = False
+            else:
+                needs_preprocessing = apply_preprocessing
+
+            # 应用预处理（如果需要）
+            if needs_preprocessing and hasattr(self, 'pipeline') and self.pipeline is not None:
+                try:
+                    X_processed = self.pipeline.transform(X)
+                    if hasattr(self, 'verbose') and self.verbose > 1:
+                        print("对输入数据应用了预处理")
+                except Exception as e:
+                    if hasattr(self, 'verbose') and self.verbose > 0:
+                        print(f"预处理失败: {e}，使用原始数据")
                     X_processed = X.values
             else:
-                X_processed = X
+                X_processed = X.values
+        else:
+            X_processed = X
 
-            # 创建DMatrix
-            dtest = xgb.DMatrix(X_processed, feature_names=self.feature_names)
+        # 创建DMatrix
+        feature_names = getattr(self, 'feature_names', None)
+        dtest = xgb.DMatrix(X_processed, feature_names=feature_names)
 
-            # 获取原始预测
-            raw_preds = self.model.predict(dtest, ntree_limit=ntree_limit)
-
-            # 处理预测结果
-            if 'multi' not in self.objective:
-                # 二分类：返回两列 [1-p, p]
-                return np.vstack([1 - raw_preds, raw_preds]).T
+        # 获取原始预测 - 处理不同版本的XGBoost参数兼容性
+        try:
+            if ntree_limit is not None:
+                # 尝试使用新版本的参数名
+                raw_preds = self.model.predict(dtest, iteration_range=(0, ntree_limit))
             else:
-                # 多分类：直接返回
-                return raw_preds
-
-        def evaluate(self, X, y, threshold=0.5, metrics=None, detailed=False,
-                     get_predictions=False, prediction_range=None):
-            """
-            评估模型性能
-
-            参数:
-                X: 特征数据
-                y: 目标变量
-                threshold: 分类阈值
-                metrics: 要计算的指标列表
-                detailed: 是否返回详细评估报告
-                get_predictions: 是否返回预测值
-                prediction_range: 预测值的限制范围[min, max]
-
-            返回:
-                评估指标字典
-            """
-            if self.model is None:
-                raise ValueError("模型尚未训练，请先调用fit方法")
-
-            if self.verbose > 0:
-                logger.info("开始评估模型性能...")
-
-            # 转换目标变量
-            if isinstance(y, pd.Series):
-                y = y.values
-
-            # 根据任务类型设置默认指标
-            if metrics is None:
-                if self.task_type == 'classification':
-                    if len(np.unique(y)) > 2:
-                        # 多分类
-                        metrics = ['accuracy', 'precision_macro', 'recall_macro', 'f1_macro', 'log_loss']
-                    else:
-                        # 二分类
-                        metrics = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc', 'log_loss']
+                raw_preds = self.model.predict(dtest)
+        except TypeError:
+            try:
+                # 回退到旧版本的参数名
+                if ntree_limit is not None:
+                    raw_preds = self.model.predict(dtest, ntree_limit=ntree_limit)
                 else:
-                    # 回归
-                    metrics = ['rmse', 'mae', 'mse', 'r2', 'explained_variance', 'max_error']
+                    raw_preds = self.model.predict(dtest)
+            except TypeError:
+                # 如果都不行，就不使用限制参数
+                raw_preds = self.model.predict(dtest)
 
-            # 获取预测结果
+        # 处理预测结果
+        if 'multi' not in self.objective:
+            # 二分类：返回两列 [1-p, p]
+            return np.vstack([1 - raw_preds, raw_preds]).T
+        else:
+            # 多分类：直接返回
+            return raw_preds
+
+    def evaluate(self, X, y, threshold=0.5, metrics=None, detailed=False,
+                 get_predictions=False, prediction_range=None, data_already_processed=True):
+        """
+        评估模型性能
+
+        参数:
+            X: 特征数据
+            y: 目标变量
+            threshold: 分类阈值
+            metrics: 要计算的指标列表
+            detailed: 是否返回详细评估报告
+            get_predictions: 是否返回预测值
+            prediction_range: 预测值的限制范围[min, max]
+            data_already_processed: 数据是否已经预处理过
+
+        返回:
+            评估指标字典
+        """
+        if self.model is None:
+            raise ValueError("模型尚未训练，请先调用fit方法")
+
+        if self.verbose > 0:
+            logger.info("开始评估模型性能...")
+
+        # 转换目标变量
+        if isinstance(y, pd.Series):
+            y = y.values
+
+        # 根据任务类型设置默认指标
+        if metrics is None:
             if self.task_type == 'classification':
-                y_pred = self.predict(X, threshold=threshold)
-
-                if 'multi' in self.objective or any(m in metrics for m in ['roc_auc', 'log_loss']):
-                    y_prob = self.predict_proba(X)
+                if len(np.unique(y)) > 2:
+                    # 多分类
+                    metrics = ['accuracy', 'precision_macro', 'recall_macro', 'f1_macro', 'log_loss']
                 else:
                     # 二分类
-                    y_prob = self.predict_proba(X)[:, 1]
+                    metrics = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc', 'log_loss']
             else:
-                # 回归任务
-                y_pred = self.predict(X)
+                # 回归
+                metrics = ['rmse', 'mae', 'mse', 'r2', 'explained_variance', 'max_error']
 
-                # 对预测应用范围限制
-                if prediction_range is not None:
-                    min_val, max_val = prediction_range
-                    y_pred = np.clip(y_pred, min_val, max_val)
+        # 获取预测结果
+        if self.task_type == 'classification':
+            # 根据数据是否已经处理过来决定是否应用预处理
+            y_pred = self.predict(X, threshold=threshold, apply_preprocessing=not data_already_processed)
 
-            # 计算评估指标
-            eval_results = {}
+            if 'multi' in self.objective or any(m in metrics for m in ['roc_auc', 'log_loss']):
+                y_prob = self.predict_proba(X, apply_preprocessing=not data_already_processed)
+            else:
+                # 二分类
+                y_prob = self.predict_proba(X, apply_preprocessing=not data_already_processed)[:, 1]
+        else:
+            # 回归任务
+            y_pred = self.predict(X, apply_preprocessing=not data_already_processed)
 
-            # 分类指标
-            if self.task_type == 'classification':
-                if 'accuracy' in metrics:
-                    eval_results['accuracy'] = accuracy_score(y, y_pred)
+            # 对预测应用范围限制
+            if prediction_range is not None:
+                min_val, max_val = prediction_range
+                y_pred = np.clip(y_pred, min_val, max_val)
 
-                if 'precision' in metrics:
-                    if len(np.unique(y)) > 2:
-                        eval_results['precision_macro'] = precision_score(y, y_pred, average='macro')
-                        eval_results['precision_micro'] = precision_score(y, y_pred, average='micro')
-                        eval_results['precision_weighted'] = precision_score(y, y_pred, average='weighted')
-                    else:
-                        eval_results['precision'] = precision_score(y, y_pred)
+        # 计算评估指标
+        eval_results = {}
 
-                if 'recall' in metrics:
-                    if len(np.unique(y)) > 2:
-                        eval_results['recall_macro'] = recall_score(y, y_pred, average='macro')
-                        eval_results['recall_micro'] = recall_score(y, y_pred, average='micro')
-                        eval_results['recall_weighted'] = recall_score(y, y_pred, average='weighted')
-                    else:
-                        eval_results['recall'] = recall_score(y, y_pred)
+        # 分类指标
+        if self.task_type == 'classification':
+            if 'accuracy' in metrics:
+                eval_results['accuracy'] = accuracy_score(y, y_pred)
 
-                if 'f1' in metrics:
-                    if len(np.unique(y)) > 2:
-                        eval_results['f1_macro'] = f1_score(y, y_pred, average='macro')
-                        eval_results['f1_micro'] = f1_score(y, y_pred, average='micro')
-                        eval_results['f1_weighted'] = f1_score(y, y_pred, average='weighted')
-                    else:
-                        eval_results['f1'] = f1_score(y, y_pred)
+            if 'precision' in metrics:
+                if len(np.unique(y)) > 2:
+                    eval_results['precision_macro'] = precision_score(y, y_pred, average='macro')
+                    eval_results['precision_micro'] = precision_score(y, y_pred, average='micro')
+                    eval_results['precision_weighted'] = precision_score(y, y_pred, average='weighted')
+                else:
+                    eval_results['precision'] = precision_score(y, y_pred)
 
-                if 'roc_auc' in metrics:
-                    if len(np.unique(y)) > 2:
-                        try:
-                            eval_results['roc_auc_ovr'] = roc_auc_score(y, y_prob, multi_class='ovr')
-                            eval_results['roc_auc_ovo'] = roc_auc_score(y, y_prob, multi_class='ovo')
-                        except:
-                            if self.verbose > 0:
-                                logger.warning("计算多分类ROC AUC时出错")
-                    else:
-                        try:
-                            if isinstance(y_prob, np.ndarray) and len(y_prob.shape) > 1:
-                                eval_results['roc_auc'] = roc_auc_score(y, y_prob[:, 1])
-                            else:
-                                eval_results['roc_auc'] = roc_auc_score(y, y_prob)
-                        except:
-                            if self.verbose > 0:
-                                logger.warning("计算二分类ROC AUC时出错")
+            if 'recall' in metrics:
+                if len(np.unique(y)) > 2:
+                    eval_results['recall_macro'] = recall_score(y, y_pred, average='macro')
+                    eval_results['recall_micro'] = recall_score(y, y_pred, average='micro')
+                    eval_results['recall_weighted'] = recall_score(y, y_pred, average='weighted')
+                else:
+                    eval_results['recall'] = recall_score(y, y_pred)
 
-                if 'log_loss' in metrics:
+            if 'f1' in metrics:
+                if len(np.unique(y)) > 2:
+                    eval_results['f1_macro'] = f1_score(y, y_pred, average='macro')
+                    eval_results['f1_micro'] = f1_score(y, y_pred, average='micro')
+                    eval_results['f1_weighted'] = f1_score(y, y_pred, average='weighted')
+                else:
+                    eval_results['f1'] = f1_score(y, y_pred)
+
+            if 'roc_auc' in metrics:
+                if len(np.unique(y)) > 2:
                     try:
-                        eval_results['log_loss'] = log_loss(y, y_prob)
+                        eval_results['roc_auc_ovr'] = roc_auc_score(y, y_prob, multi_class='ovr')
+                        eval_results['roc_auc_ovo'] = roc_auc_score(y, y_prob, multi_class='ovo')
                     except:
                         if self.verbose > 0:
-                            logger.warning("计算log_loss时出错")
-
-                if 'confusion_matrix' in metrics or detailed:
+                            logger.warning("计算多分类ROC AUC时出错")
+                else:
                     try:
-                        eval_results['confusion_matrix'] = confusion_matrix(y, y_pred)
-                    except:
-                        if self.verbose > 0:
-                            logger.warning("计算混淆矩阵时出错")
-
-                if 'classification_report' in metrics or detailed:
-                    try:
-                        eval_results['classification_report'] = classification_report(y, y_pred, output_dict=True)
-                    except:
-                        if self.verbose > 0:
-                            logger.warning("生成分类报告时出错")
-
-                if 'average_precision' in metrics:
-                    try:
-                        if len(np.unique(y)) > 2:
-                            # 对每个类别计算
-                            y_bin = label_binarize(y, classes=np.unique(y))
-                            eval_results['average_precision'] = {}
-
-                            for i, cls in enumerate(np.unique(y)):
-                                ap = average_precision_score(y_bin[:, i], y_prob[:, i])
-                                eval_results['average_precision'][f'class_{cls}'] = ap
+                        if isinstance(y_prob, np.ndarray) and len(y_prob.shape) > 1:
+                            eval_results['roc_auc'] = roc_auc_score(y, y_prob[:, 1])
                         else:
-                            if isinstance(y_prob, np.ndarray) and len(y_prob.shape) > 1:
-                                ap = average_precision_score(y, y_prob[:, 1])
-                            else:
-                                ap = average_precision_score(y, y_prob)
-                            eval_results['average_precision'] = ap
-                    except Exception as e:
+                            eval_results['roc_auc'] = roc_auc_score(y, y_prob)
+                    except:
                         if self.verbose > 0:
-                            logger.warning(f"计算平均精度时出错: {e}")
+                            logger.warning("计算二分类ROC AUC时出错")
 
-            # 回归指标
-            else:
-                if 'mse' in metrics:
-                    eval_results['mse'] = mean_squared_error(y, y_pred)
-
-                if 'rmse' in metrics:
-                    eval_results['rmse'] = np.sqrt(mean_squared_error(y, y_pred))
-
-                if 'mae' in metrics:
-                    eval_results['mae'] = mean_absolute_error(y, y_pred)
-
-                if 'r2' in metrics:
-                    eval_results['r2'] = r2_score(y, y_pred)
-
-                if 'explained_variance' in metrics:
-                    eval_results['explained_variance'] = explained_variance_score(y, y_pred)
-
-                if 'max_error' in metrics:
-                    eval_results['max_error'] = max_error(y, y_pred)
-
-                if 'median_absolute_error' in metrics:
-                    eval_results['median_absolute_error'] = median_absolute_error(y, y_pred)
-
-                if 'mape' in metrics:
-                    # 平均绝对百分比误差
-                    try:
-                        mask = y != 0
-                        eval_results['mape'] = np.mean(np.abs((y[mask] - y_pred[mask]) / y[mask])) * 100
-                    except Exception as e:
-                        if self.verbose > 0:
-                            logger.warning(f"计算MAPE时出错: {e}")
-
-                if 'msle' in metrics:
-                    # 均方对数误差
-                    try:
-                        if np.all(y >= 0) and np.all(y_pred >= 0):
-                            eval_results['msle'] = mean_squared_log_error(y, y_pred)
-                    except Exception as e:
-                        if self.verbose > 0:
-                            logger.warning(f"计算MSLE时出错: {e}")
-
-            # 添加预测统计
-            if detailed:
-                pred_stats = {
-                    'min': np.min(y_pred),
-                    'max': np.max(y_pred),
-                    'mean': np.mean(y_pred),
-                    'std': np.std(y_pred),
-                    'median': np.median(y_pred)
-                }
-                eval_results['prediction_stats'] = pred_stats
-
-                # 错误分析
-                if self.task_type == 'classification':
-                    # 错误分类的样本分析
-                    incorrect_mask = y_pred != y
-                    incorrect_count = np.sum(incorrect_mask)
-
-                    eval_results['error_analysis'] = {
-                        'incorrect_count': int(incorrect_count),
-                        'incorrect_percentage': float(incorrect_count / len(y) * 100)
-                    }
-
-                    # 分类别的分析
-                    if len(np.unique(y)) <= 10:  # 限制类别数量
-                        per_class = {}
-                        for cls in np.unique(y):
-                            cls_mask = y == cls
-                            cls_correct = np.sum((y_pred == cls) & cls_mask)
-                            cls_total = np.sum(cls_mask)
-
-                            per_class[str(cls)] = {
-                                'accuracy': float(cls_correct / cls_total if cls_total > 0 else 0),
-                                'count': int(cls_total),
-                                'correct': int(cls_correct)
-                            }
-
-                        eval_results['per_class_performance'] = per_class
-                else:
-                    # 回归误差分析
-                    errors = y - y_pred
-                    abs_errors = np.abs(errors)
-                    percentiles = [10, 25, 50, 75, 90, 95, 99]
-
-                    error_stats = {
-                        'mean_error': float(np.mean(errors)),
-                        'mean_abs_error': float(np.mean(abs_errors)),
-                        'std_error': float(np.std(errors)),
-                        'max_abs_error': float(np.max(abs_errors)),
-                        'percentiles': {
-                            f'p{p}': float(np.percentile(abs_errors, p)) for p in percentiles
-                        }
-                    }
-
-                    eval_results['error_analysis'] = error_stats
-
-            # 保存评估结果
-            self.evaluation_results.update(eval_results)
-
-            # 打印评估结果
-            if self.verbose > 0:
-                logger.info("模型评估结果:")
-                for metric, value in eval_results.items():
-                    if isinstance(value, (int, float)):
-                        logger.info(f"  - {metric}: {value:.4f}")
-                    elif isinstance(value, dict):
-                        continue  # 跳过复杂结构
-                    elif isinstance(value, np.ndarray) and value.size <= 25:
-                        logger.info(f"  - {metric}:\n{value}")
-
-            # 记录到MLflow
-            if self.experiment_tracking and mlflow.active_run():
-                for metric, value in eval_results.items():
-                    if isinstance(value, (int, float)):
-                        mlflow.log_metric(f"eval_{metric}", value)
-
-            # 返回结果
-            if get_predictions:
-                if self.task_type == 'classification' and ('roc_auc' in metrics or 'log_loss' in metrics):
-                    return eval_results, y_pred, y_prob
-                else:
-                    return eval_results, y_pred
-            else:
-                return eval_results
-
-        def cross_validate(self, X, y, cv=5, stratified=None, metrics=None,
-                           early_stopping_rounds=None, verbose=None):
-            """
-            交叉验证
-
-            参数:
-                X: 特征数据
-                y: 目标变量
-                cv: 折数或交叉验证对象
-                stratified: 是否使用分层抽样
-                metrics: 评估指标
-                early_stopping_rounds: 早停轮数
-                verbose: 详细程度
-
-            返回:
-                cv_results: 交叉验证结果
-            """
-            if verbose is None:
-                verbose = self.verbose
-
-            if verbose > 0:
-                logger.info(f"开始{cv}折交叉验证...")
-
-            # 根据任务类型确定分层策略
-            if stratified is None:
-                stratified = (self.task_type == 'classification')
-
-            # 转换为DataFrame
-            if not isinstance(X, pd.DataFrame):
-                X = pd.DataFrame(X)
-
-            if isinstance(y, pd.Series):
-                y_values = y.values
-            else:
-                y_values = y
-
-            # 确定评估指标
-            if metrics is None:
-                if self.task_type == 'classification':
-                    if len(np.unique(y_values)) > 2:
-                        metrics = ['accuracy', 'f1_macro']
-                    else:
-                        metrics = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc']
-                else:
-                    metrics = ['rmse', 'mae', 'r2']
-
-            # 创建交叉验证划分对象
-            if isinstance(cv, int):
-                if stratified and self.task_type == 'classification':
-                    cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state)
-                else:
-                    cv_obj = KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
-            else:
-                # 使用传入的交叉验证对象
-                cv_obj = cv
-
-            # 存储每折的结果
-            fold_results = []
-            fold_models = []
-            all_metrics = {}
-            feature_importances = {}
-
-            # 执行交叉验证
-            for fold, (train_idx, val_idx) in enumerate(cv_obj.split(X, y_values if stratified else None)):
-                if verbose > 0:
-                    logger.info(f"训练折 {fold + 1}/{cv_obj.get_n_splits()}")
-
-                # 划分训练集和验证集
-                X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-                y_train, y_val = y_values[train_idx], y_values[val_idx]
-
-                # 训练模型
-                model = self.__class__(
-                    task_type=self.task_type,
-                    objective=self.objective,
-                    random_state=self.random_state,
-                    verbose=0  # 关闭每折的详细输出
-                )
-                model.set_params(**self.params)
-
-                # 训练模型
-                eval_set = [(X_val, y_val)]
-                model.fit(X_train, y_train, eval_set=eval_set, early_stopping_rounds=early_stopping_rounds)
-
-                # 评估模型
-                metrics_result = model.evaluate(X_val, y_val, metrics=metrics)
-
-                # 收集结果
-                fold_results.append(metrics_result)
-                fold_models.append(model.model)
-
-                # 收集特征重要性
-                if model.feature_importances:
-                    for feature, importance in model.feature_importances.items():
-                        if feature not in feature_importances:
-                            feature_importances[feature] = []
-                        feature_importances[feature].append(importance)
-
-                if verbose > 1:
-                    logger.debug(f"折 {fold + 1} 评估结果:")
-                    for metric, value in metrics_result.items():
-                        if isinstance(value, (int, float)):
-                            logger.debug(f"  - {metric}: {value:.4f}")
-
-            # 汇总结果
-            cv_results = {}
-
-            # 计算平均指标
-            for metric in fold_results[0].keys():
-                if isinstance(fold_results[0][metric], (int, float)):
-                    values = [fold[metric] for fold in fold_results]
-                    cv_results[f"{metric}_mean"] = np.mean(values)
-                    cv_results[f"{metric}_std"] = np.std(values)
-                    cv_results[f"{metric}_values"] = values
-
-                    all_metrics[metric] = values
-
-            # 特征重要性汇总
-            if feature_importances:
-                mean_importances = {}
-                for feature, values in feature_importances.items():
-                    mean_importances[feature] = np.mean(values)
-
-                cv_results['feature_importance'] = {
-                    'mean': mean_importances,
-                    'per_fold': feature_importances
-                }
-
-            # 保存交叉验证结果
-            self.cv_results = cv_results
-
-            # 打印结果摘要
-            if verbose > 0:
-                logger.info(f"{cv}折交叉验证结果:")
-                for metric, values in all_metrics.items():
-                    logger.info(f"  - {metric}: {np.mean(values):.4f} ± {np.std(values):.4f}")
-
-            # 记录到MLflow
-            if self.experiment_tracking and mlflow.active_run():
-                for metric, values in all_metrics.items():
-                    mlflow.log_metric(f"cv_{metric}_mean", np.mean(values))
-                    mlflow.log_metric(f"cv_{metric}_std", np.std(values))
-
-            return cv_results
-
-        def grid_search(self, X, y, param_grid, cv=5, scoring=None, n_jobs=-1,
-                        refit=True, verbose=None):
-            """
-            网格搜索调参
-
-            参数:
-                X: 特征数据
-                y: 目标变量
-                param_grid: 参数网格
-                cv: 交叉验证折数
-                scoring: 评分指标
-                n_jobs: 并行任务数
-                refit: 是否使用最佳参数重新拟合模型
-                verbose: 详细程度
-
-            返回:
-                best_params: 最佳参数
-            """
-            if verbose is None:
-                verbose = self.verbose
-
-            if verbose > 0:
-                logger.info("开始网格搜索...")
-                param_combinations = 1
-                for param, values in param_grid.items():
-                    param_combinations *= len(values)
-                logger.info(f"参数组合总数: {param_combinations}")
-
-            # 使用分层CV进行分类任务
-            if self.task_type == 'classification':
-                cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state)
-            else:
-                cv_obj = KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
-
-            # 设置默认评分指标
-            if scoring is None:
-                if self.task_type == 'classification':
-                    if len(np.unique(y)) > 2:
-                        scoring = 'accuracy'
-                    else:
-                        scoring = 'roc_auc'
-                else:
-                    scoring = 'neg_mean_squared_error'
-
-            # 创建基础模型
-            if self.task_type == 'classification':
-                base_model = xgb.XGBClassifier(
-                    objective=self.objective,
-                    random_state=self.random_state,
-                    verbosity=0,
-                    use_label_encoder=False
-                )
-            else:
-                base_model = xgb.XGBRegressor(
-                    objective=self.objective,
-                    random_state=self.random_state,
-                    verbosity=0
-                )
-
-            # 创建网格搜索对象
-            grid_search = GridSearchCV(
-                estimator=base_model,
-                param_grid=param_grid,
-                scoring=scoring,
-                cv=cv_obj,
-                n_jobs=n_jobs,
-                refit=refit,
-                verbose=max(0, verbose - 1)
-            )
-
-            # 执行网格搜索
-            start_time = time.time()
-            grid_search.fit(X, y)
-            search_time = time.time() - start_time
-
-            # 提取最佳参数
-            best_params = grid_search.best_params_
-            best_score = grid_search.best_score_
-
-            # 更新模型参数
-            self.best_params = best_params
-            self.params.update(best_params)
-
-            if verbose > 0:
-                logger.info(f"网格搜索完成，耗时 {search_time:.2f} 秒")
-                logger.info(f"最佳参数: {best_params}")
-                logger.info(f"最佳{scoring}分数: {best_score:.4f}")
-
-            # 记录到MLflow
-            if self.experiment_tracking and mlflow.active_run():
-                mlflow.log_metric(f"grid_search_best_{scoring}", best_score)
-                mlflow.log_metric("grid_search_time", search_time)
-
-                for param, value in best_params.items():
-                    mlflow.log_param(f"best_{param}", value)
-
-            # 如果refit为True，模型已经使用最佳参数重新训练
-            if refit:
-                self.model = grid_search.best_estimator_
-
-                # 提取内部booster
-                if hasattr(self.model, 'get_booster'):
-                    self.model = self.model.get_booster()
-
-                if verbose > 0:
-                    logger.info("使用最佳参数重新拟合了模型")
-
-            return best_params, best_score
-
-        def random_search(self, X, y, param_distributions, n_iter=10, cv=5,
-                          scoring=None, n_jobs=-1, refit=True, verbose=None):
-            """
-            随机搜索调参
-
-            参数:
-                X: 特征数据
-                y: 目标变量
-                param_distributions: 参数分布
-                n_iter: 迭代次数
-                cv: 交叉验证折数
-                scoring: 评分指标
-                n_jobs: 并行任务数
-                refit: 是否使用最佳参数重新拟合模型
-                verbose: 详细程度
-
-            返回:
-                best_params: 最佳参数
-            """
-            if verbose is None:
-                verbose = self.verbose
-
-            if verbose > 0:
-                logger.info(f"开始随机搜索 (n_iter={n_iter})...")
-
-            # 使用分层CV进行分类任务
-            if self.task_type == 'classification':
-                cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state)
-            else:
-                cv_obj = KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
-
-            # 设置默认评分指标
-            if scoring is None:
-                if self.task_type == 'classification':
-                    if len(np.unique(y)) > 2:
-                        scoring = 'accuracy'
-                    else:
-                        scoring = 'roc_auc'
-                else:
-                    scoring = 'neg_mean_squared_error'
-
-            # 创建基础模型
-            if self.task_type == 'classification':
-                base_model = xgb.XGBClassifier(
-                    objective=self.objective,
-                    random_state=self.random_state,
-                    verbosity=0,
-                    use_label_encoder=False
-                )
-            else:
-                base_model = xgb.XGBRegressor(
-                    objective=self.objective,
-                    random_state=self.random_state,
-                    verbosity=0
-                )
-
-            # 创建随机搜索对象
-            random_search = RandomizedSearchCV(
-                estimator=base_model,
-                param_distributions=param_distributions,
-                n_iter=n_iter,
-                scoring=scoring,
-                cv=cv_obj,
-                random_state=self.random_state,
-                n_jobs=n_jobs,
-                refit=refit,
-                verbose=max(0, verbose - 1)
-            )
-
-            # 执行随机搜索
-            start_time = time.time()
-            random_search.fit(X, y)
-            search_time = time.time() - start_time
-
-            # 提取最佳参数
-            best_params = random_search.best_params_
-            best_score = random_search.best_score_
-
-            # 更新模型参数
-            self.best_params = best_params
-            self.params.update(best_params)
-
-            if verbose > 0:
-                logger.info(f"随机搜索完成，耗时 {search_time:.2f} 秒")
-                logger.info(f"最佳参数: {best_params}")
-                logger.info(f"最佳{scoring}分数: {best_score:.4f}")
-
-            # 记录到MLflow
-            if self.experiment_tracking and mlflow.active_run():
-                mlflow.log_metric(f"random_search_best_{scoring}", best_score)
-                mlflow.log_metric("random_search_time", search_time)
-
-                for param, value in best_params.items():
-                    mlflow.log_param(f"best_{param}", value)
-
-            # 如果refit为True，模型已经使用最佳参数重新训练
-            if refit:
-                self.model = random_search.best_estimator_
-
-                # 提取内部booster
-                if hasattr(self.model, 'get_booster'):
-                    self.model = self.model.get_booster()
-
-                if verbose > 0:
-                    logger.info("使用最佳参数重新拟合了模型")
-
-            return best_params, best_score
-
-        def hyperopt_optimize(self, X, y, param_space, max_evals=50, cv=5,
-                              scoring=None, early_stopping_rounds=None, verbose=None):
-            """
-            使用Hyperopt进行超参数优化
-
-            参数:
-                X: 特征数据
-                y: 目标变量
-                param_space: 参数空间
-                max_evals: 最大评估次数
-                cv: 交叉验证折数
-                scoring: 评分指标
-                early_stopping_rounds: 早停轮数
-                verbose: 详细程度
-
-            返回:
-                best_params: 最佳参数
-            """
-            if verbose is None:
-                verbose = self.verbose
-
-            if verbose > 0:
-                logger.info(f"开始Hyperopt优化 (max_evals={max_evals})...")
-
-            # 设置默认评分指标
-            if scoring is None:
-                if self.task_type == 'classification':
-                    if len(np.unique(y)) > 2:
-                        scoring = 'accuracy'
-                    else:
-                        scoring = 'roc_auc'
-                else:
-                    scoring = 'neg_mean_squared_error'
-
-            # 使用分层CV进行分类任务
-            if self.task_type == 'classification':
-                cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state)
-            else:
-                cv_obj = KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
-
-            # 定义目标函数
-            def objective(params):
-                # 修正参数类型
-                for param, value in params.items():
-                    if param in ['max_depth', 'min_child_weight', 'n_estimators']:
-                        params[param] = int(value)
-
-                # 当前参数集合
-                current_params = self.params.copy()
-                current_params.update(params)
-
-                # 创建模型
-                if self.task_type == 'classification':
-                    model = xgb.XGBClassifier(
-                        **current_params,
-                        random_state=self.random_state,
-                        verbosity=0,
-                        use_label_encoder=False
-                    )
-                else:
-                    model = xgb.XGBRegressor(
-                        **current_params,
-                        random_state=self.random_state,
-                        verbosity=0
-                    )
-
+            if 'log_loss' in metrics:
                 try:
-                    # 交叉验证
-                    cv_scores = []
-                    for train_idx, val_idx in cv_obj.split(X, y):
-                        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-                        y_train, y_val = y[train_idx], y[val_idx]
+                    eval_results['log_loss'] = log_loss(y, y_prob)
+                except:
+                    if self.verbose > 0:
+                        logger.warning("计算log_loss时出错")
 
-                        # 训练模型
-                        eval_set = [(X_val, y_val)]
-                        model.fit(
-                            X_train, y_train,
-                            eval_set=eval_set,
-                            early_stopping_rounds=early_stopping_rounds,
-                            verbose=False
-                        )
+            if 'confusion_matrix' in metrics or detailed:
+                try:
+                    eval_results['confusion_matrix'] = confusion_matrix(y, y_pred)
+                except:
+                    if self.verbose > 0:
+                        logger.warning("计算混淆矩阵时出错")
 
-                        # 评估模型
-                        if self.task_type == 'classification':
-                            if 'multi' in self.objective:
-                                # 多分类
-                                y_pred = model.predict(X_val)
-                                if scoring == 'accuracy':
-                                    score = accuracy_score(y_val, y_pred)
-                                elif scoring == 'f1_macro':
-                                    score = f1_score(y_val, y_pred, average='macro')
-                                elif scoring == 'log_loss':
-                                    y_prob = model.predict_proba(X_val)
-                                    score = -log_loss(y_val, y_prob)  # 取负值，因为hyperopt最小化
-                                else:
-                                    # 默认使用准确率
-                                    score = accuracy_score(y_val, y_pred)
-                            else:
-                                # 二分类
-                                if scoring == 'roc_auc':
-                                    y_prob = model.predict_proba(X_val)[:, 1]
-                                    score = roc_auc_score(y_val, y_prob)
-                                elif scoring == 'accuracy':
-                                    y_pred = model.predict(X_val)
-                                    score = accuracy_score(y_val, y_pred)
-                                elif scoring == 'f1':
-                                    y_pred = model.predict(X_val)
-                                    score = f1_score(y_val, y_pred)
-                                elif scoring == 'log_loss':
-                                    y_prob = model.predict_proba(X_val)
-                                    score = -log_loss(y_val, y_prob)  # 取负值
-                                else:
-                                    # 默认使用AUC
-                                    y_prob = model.predict_proba(X_val)[:, 1]
-                                    score = roc_auc_score(y_val, y_prob)
-                        else:
-                            # 回归
-                            y_pred = model.predict(X_val)
-                            if scoring == 'neg_mean_squared_error':
-                                score = -mean_squared_error(y_val, y_pred)  # 取负值
-                            elif scoring == 'neg_root_mean_squared_error':
-                                score = -np.sqrt(mean_squared_error(y_val, y_pred))  # 取负值
-                            elif scoring == 'neg_mean_absolute_error':
-                                score = -mean_absolute_error(y_val, y_pred)  # 取负值
-                            elif scoring == 'r2':
-                                score = r2_score(y_val, y_pred)
-                            else:
-                                # 默认使用MSE
-                                score = -mean_squared_error(y_val, y_pred)  # 取负值
+            if 'classification_report' in metrics or detailed:
+                try:
+                    eval_results['classification_report'] = classification_report(y, y_pred, output_dict=True)
+                except:
+                    if self.verbose > 0:
+                        logger.warning("生成分类报告时出错")
 
-                        cv_scores.append(score)
+            if 'average_precision' in metrics:
+                try:
+                    if len(np.unique(y)) > 2:
+                        # 对每个类别计算
+                        y_bin = label_binarize(y, classes=np.unique(y))
+                        eval_results['average_precision'] = {}
 
-                    # 计算平均分数
-                    mean_score = np.mean(cv_scores)
-                    std_score = np.std(cv_scores)
-
-                    # 对于hyperopt来说，要最小化目标函数，所以对于越大越好的指标，要取负值
-                    if scoring in ['accuracy', 'roc_auc', 'f1', 'f1_macro', 'r2']:
-                        hyperopt_score = -mean_score
+                        for i, cls in enumerate(np.unique(y)):
+                            ap = average_precision_score(y_bin[:, i], y_prob[:, i])
+                            eval_results['average_precision'][f'class_{cls}'] = ap
                     else:
-                        # 对于已经是负值的指标（如neg_mean_squared_error），保持原样
-                        hyperopt_score = mean_score
-
-                    return {
-                        'loss': hyperopt_score,
-                        'status': STATUS_OK,
-                        'mean_score': mean_score,
-                        'std_score': std_score,
-                        'params': params
-                    }
+                        if isinstance(y_prob, np.ndarray) and len(y_prob.shape) > 1:
+                            ap = average_precision_score(y, y_prob[:, 1])
+                        else:
+                            ap = average_precision_score(y, y_prob)
+                        eval_results['average_precision'] = ap
                 except Exception as e:
-                    if verbose > 1:
-                        logger.debug(f"评估参数时出错: {e}")
-                    return {
-                        'loss': float('inf'),
-                        'status': STATUS_OK,
-                        'error': str(e),
-                        'params': params
-                    }
+                    if self.verbose > 0:
+                        logger.warning(f"计算平均精度时出错: {e}")
 
-            # 执行优化
-            start_time = time.time()
-            trials = Trials()
-            best = fmin(
-                fn=objective,
-                space=param_space,
-                algo=tpe.suggest,
-                max_evals=max_evals,
-                trials=trials,
-                verbose=verbose > 1,
-                rstate=np.random.RandomState(self.random_state)
+        # 回归指标
+        else:
+            if 'mse' in metrics:
+                eval_results['mse'] = mean_squared_error(y, y_pred)
+
+            if 'rmse' in metrics:
+                eval_results['rmse'] = np.sqrt(mean_squared_error(y, y_pred))
+
+            if 'mae' in metrics:
+                eval_results['mae'] = mean_absolute_error(y, y_pred)
+
+            if 'r2' in metrics:
+                eval_results['r2'] = r2_score(y, y_pred)
+
+            if 'explained_variance' in metrics:
+                eval_results['explained_variance'] = explained_variance_score(y, y_pred)
+
+            if 'max_error' in metrics:
+                eval_results['max_error'] = max_error(y, y_pred)
+
+            if 'median_absolute_error' in metrics:
+                eval_results['median_absolute_error'] = median_absolute_error(y, y_pred)
+
+            if 'mape' in metrics:
+                # 平均绝对百分比误差
+                try:
+                    mask = y != 0
+                    eval_results['mape'] = np.mean(np.abs((y[mask] - y_pred[mask]) / y[mask])) * 100
+                except Exception as e:
+                    if self.verbose > 0:
+                        logger.warning(f"计算MAPE时出错: {e}")
+
+            if 'msle' in metrics:
+                # 均方对数误差
+                try:
+                    if np.all(y >= 0) and np.all(y_pred >= 0):
+                        eval_results['msle'] = mean_squared_log_error(y, y_pred)
+                except Exception as e:
+                    if self.verbose > 0:
+                        logger.warning(f"计算MSLE时出错: {e}")
+
+        # 添加预测统计
+        if detailed:
+            pred_stats = {
+                'min': np.min(y_pred),
+                'max': np.max(y_pred),
+                'mean': np.mean(y_pred),
+                'std': np.std(y_pred),
+                'median': np.median(y_pred)
+            }
+            eval_results['prediction_stats'] = pred_stats
+
+            # 错误分析
+            if self.task_type == 'classification':
+                # 错误分类的样本分析
+                incorrect_mask = y_pred != y
+                incorrect_count = np.sum(incorrect_mask)
+
+                eval_results['error_analysis'] = {
+                    'incorrect_count': int(incorrect_count),
+                    'incorrect_percentage': float(incorrect_count / len(y) * 100)
+                }
+
+                # 分类别的分析
+                if len(np.unique(y)) <= 10:  # 限制类别数量
+                    per_class = {}
+                    for cls in np.unique(y):
+                        cls_mask = y == cls
+                        cls_correct = np.sum((y_pred == cls) & cls_mask)
+                        cls_total = np.sum(cls_mask)
+
+                        per_class[str(cls)] = {
+                            'accuracy': float(cls_correct / cls_total if cls_total > 0 else 0),
+                            'count': int(cls_total),
+                            'correct': int(cls_correct)
+                        }
+
+                    eval_results['per_class_performance'] = per_class
+            else:
+                # 回归误差分析
+                errors = y - y_pred
+                abs_errors = np.abs(errors)
+                percentiles = [10, 25, 50, 75, 90, 95, 99]
+
+                error_stats = {
+                    'mean_error': float(np.mean(errors)),
+                    'mean_abs_error': float(np.mean(abs_errors)),
+                    'std_error': float(np.std(errors)),
+                    'max_abs_error': float(np.max(abs_errors)),
+                    'percentiles': {
+                        f'p{p}': float(np.percentile(abs_errors, p)) for p in percentiles
+                    }
+                }
+
+                eval_results['error_analysis'] = error_stats
+
+        # 保存评估结果
+        self.evaluation_results.update(eval_results)
+
+        # 打印评估结果
+        if self.verbose > 0:
+            logger.info("模型评估结果:")
+            for metric, value in eval_results.items():
+                if isinstance(value, (int, float)):
+                    logger.info(f"  - {metric}: {value:.4f}")
+                elif isinstance(value, dict):
+                    continue  # 跳过复杂结构
+                elif isinstance(value, np.ndarray) and value.size <= 25:
+                    logger.info(f"  - {metric}:\n{value}")
+
+        # 记录到MLflow
+        if self.experiment_tracking and mlflow.active_run():
+            for metric, value in eval_results.items():
+                if isinstance(value, (int, float)):
+                    mlflow.log_metric(f"eval_{metric}", value)
+
+        # 返回结果
+        if get_predictions:
+            if self.task_type == 'classification' and ('roc_auc' in metrics or 'log_loss' in metrics):
+                return eval_results, y_pred, y_prob
+            else:
+                return eval_results, y_pred
+        else:
+            return eval_results
+
+    def cross_validate(self, X, y, cv=5, stratified=None, metrics=None,
+                       early_stopping_rounds=None, verbose=None):
+        """
+        交叉验证
+
+        参数:
+            X: 特征数据
+            y: 目标变量
+            cv: 折数或交叉验证对象
+            stratified: 是否使用分层抽样
+            metrics: 评估指标
+            early_stopping_rounds: 早停轮数
+            verbose: 详细程度
+
+        返回:
+            cv_results: 交叉验证结果
+        """
+        if verbose is None:
+            verbose = self.verbose
+
+        if verbose > 0:
+            logger.info(f"开始{cv}折交叉验证...")
+
+        # 根据任务类型确定分层策略
+        if stratified is None:
+            stratified = (self.task_type == 'classification')
+
+        # 转换为DataFrame
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X)
+
+        if isinstance(y, pd.Series):
+            y_values = y.values
+        else:
+            y_values = y
+
+        # 确定评估指标
+        if metrics is None:
+            if self.task_type == 'classification':
+                if len(np.unique(y_values)) > 2:
+                    metrics = ['accuracy', 'f1_macro']
+                else:
+                    metrics = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc']
+            else:
+                metrics = ['rmse', 'mae', 'r2']
+
+        # 创建交叉验证划分对象
+        if isinstance(cv, int):
+            if stratified and self.task_type == 'classification':
+                cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+            else:
+                cv_obj = KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+        else:
+            # 使用传入的交叉验证对象
+            cv_obj = cv
+
+        # 存储每折的结果
+        fold_results = []
+        fold_models = []
+        all_metrics = {}
+        feature_importances = {}
+
+        # 执行交叉验证
+        for fold, (train_idx, val_idx) in enumerate(cv_obj.split(X, y_values if stratified else None)):
+            if verbose > 0:
+                logger.info(f"训练折 {fold + 1}/{cv_obj.get_n_splits()}")
+
+            # 划分训练集和验证集
+            X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+            y_train, y_val = y_values[train_idx], y_values[val_idx]
+
+            # 训练模型
+            model = self.__class__(
+                task_type=self.task_type,
+                objective=self.objective,
+                random_state=self.random_state,
+                verbose=0  # 关闭每折的详细输出
+            )
+            model.set_params(**self.params)
+
+            # 训练模型
+            eval_set = [(X_val, y_val)]
+            model.fit(X_train, y_train, eval_set=eval_set, early_stopping_rounds=early_stopping_rounds)
+
+            # 评估模型
+            metrics_result = model.evaluate(X_val, y_val, metrics=metrics)
+
+            # 收集结果
+            fold_results.append(metrics_result)
+            fold_models.append(model.model)
+
+            # 收集特征重要性
+            if model.feature_importances:
+                for feature, importance in model.feature_importances.items():
+                    if feature not in feature_importances:
+                        feature_importances[feature] = []
+                    feature_importances[feature].append(importance)
+
+            if verbose > 1:
+                logger.debug(f"折 {fold + 1} 评估结果:")
+                for metric, value in metrics_result.items():
+                    if isinstance(value, (int, float)):
+                        logger.debug(f"  - {metric}: {value:.4f}")
+
+        # 汇总结果
+        cv_results = {}
+
+        # 计算平均指标
+        for metric in fold_results[0].keys():
+            if isinstance(fold_results[0][metric], (int, float)):
+                values = [fold[metric] for fold in fold_results]
+                cv_results[f"{metric}_mean"] = np.mean(values)
+                cv_results[f"{metric}_std"] = np.std(values)
+                cv_results[f"{metric}_values"] = values
+
+                all_metrics[metric] = values
+
+        # 特征重要性汇总
+        if feature_importances:
+            mean_importances = {}
+            for feature, values in feature_importances.items():
+                mean_importances[feature] = np.mean(values)
+
+            cv_results['feature_importance'] = {
+                'mean': mean_importances,
+                'per_fold': feature_importances
+            }
+
+        # 保存交叉验证结果
+        self.cv_results = cv_results
+
+        # 打印结果摘要
+        if verbose > 0:
+            logger.info(f"{cv}折交叉验证结果:")
+            for metric, values in all_metrics.items():
+                logger.info(f"  - {metric}: {np.mean(values):.4f} ± {np.std(values):.4f}")
+
+        # 记录到MLflow
+        if self.experiment_tracking and mlflow.active_run():
+            for metric, values in all_metrics.items():
+                mlflow.log_metric(f"cv_{metric}_mean", np.mean(values))
+                mlflow.log_metric(f"cv_{metric}_std", np.std(values))
+
+        return cv_results
+
+    def grid_search(self, X, y, param_grid, cv=5, scoring=None, n_jobs=-1,
+                    refit=True, verbose=None):
+        """
+        网格搜索调参
+
+        参数:
+            X: 特征数据
+            y: 目标变量
+            param_grid: 参数网格
+            cv: 交叉验证折数
+            scoring: 评分指标
+            n_jobs: 并行任务数
+            refit: 是否使用最佳参数重新拟合模型
+            verbose: 详细程度
+
+        返回:
+            best_params: 最佳参数
+        """
+        if verbose is None:
+            verbose = self.verbose
+
+        if verbose > 0:
+            logger.info("开始网格搜索...")
+            param_combinations = 1
+            for param, values in param_grid.items():
+                param_combinations *= len(values)
+            logger.info(f"参数组合总数: {param_combinations}")
+
+        # 使用分层CV进行分类任务
+        if self.task_type == 'classification':
+            cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+        else:
+            cv_obj = KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+
+        # 设置默认评分指标
+        if scoring is None:
+            if self.task_type == 'classification':
+                if len(np.unique(y)) > 2:
+                    scoring = 'accuracy'
+                else:
+                    scoring = 'roc_auc'
+            else:
+                scoring = 'neg_mean_squared_error'
+
+        # 创建基础模型
+        if self.task_type == 'classification':
+            base_model = xgb.XGBClassifier(
+                objective=self.objective,
+                random_state=self.random_state,
+                verbosity=0,
+                use_label_encoder=False
+            )
+        else:
+            base_model = xgb.XGBRegressor(
+                objective=self.objective,
+                random_state=self.random_state,
+                verbosity=0
             )
 
-            # 获取最佳参数
-            best_params = space_eval(param_space, best)
+        # 创建网格搜索对象
+        grid_search = GridSearchCV(
+            estimator=base_model,
+            param_grid=param_grid,
+            scoring=scoring,
+            cv=cv_obj,
+            n_jobs=n_jobs,
+            refit=refit,
+            verbose=max(0, verbose - 1)
+        )
 
-            # 修正参数类型
+        # 执行网格搜索
+        start_time = time.time()
+        grid_search.fit(X, y)
+        search_time = time.time() - start_time
+
+        # 提取最佳参数
+        best_params = grid_search.best_params_
+        best_score = grid_search.best_score_
+
+        # 更新模型参数
+        self.best_params = best_params
+        self.params.update(best_params)
+
+        if verbose > 0:
+            logger.info(f"网格搜索完成，耗时 {search_time:.2f} 秒")
+            logger.info(f"最佳参数: {best_params}")
+            logger.info(f"最佳{scoring}分数: {best_score:.4f}")
+
+        # 记录到MLflow
+        if self.experiment_tracking and mlflow.active_run():
+            mlflow.log_metric(f"grid_search_best_{scoring}", best_score)
+            mlflow.log_metric("grid_search_time", search_time)
+
             for param, value in best_params.items():
-                if param in ['max_depth', 'min_child_weight', 'n_estimators']:
-                    best_params[param] = int(value)
+                mlflow.log_param(f"best_{param}", value)
 
-            # 获取最佳分数
-            best_trial_idx = np.argmin([t['result']['loss'] for t in trials.trials if 'result' in t])
-            best_score = trials.trials[best_trial_idx]['result'].get('mean_score', float('inf'))
+        # 如果refit为True，模型已经使用最佳参数重新训练
+        if refit:
+            self.model = grid_search.best_estimator_
 
-            # 更新模型参数
-            self.best_params = best_params
-            self.params.update(best_params)
-
-            search_time = time.time() - start_time
+            # 提取内部booster
+            if hasattr(self.model, 'get_booster'):
+                self.model = self.model.get_booster()
 
             if verbose > 0:
-                logger.info(f"Hyperopt优化完成，耗时 {search_time:.2f} 秒")
-                logger.info(f"最佳参数: {best_params}")
-                logger.info(f"最佳{scoring}分数: {best_score:.4f}")
+                logger.info("使用最佳参数重新拟合了模型")
 
-            # 记录到MLflow
-            if self.experiment_tracking and mlflow.active_run():
-                mlflow.log_metric(f"hyperopt_best_{scoring}", best_score)
-                mlflow.log_metric("hyperopt_time", search_time)
+        return best_params, best_score
 
-                for param, value in best_params.items():
-                    mlflow.log_param(f"best_{param}", value)
+    def random_search(self, X, y, param_distributions, n_iter=10, cv=5,
+                      scoring=None, n_jobs=-1, refit=True, verbose=None):
+        """
+        随机搜索调参
 
-            # 使用最佳参数重新训练模型
+        参数:
+            X: 特征数据
+            y: 目标变量
+            param_distributions: 参数分布
+            n_iter: 迭代次数
+            cv: 交叉验证折数
+            scoring: 评分指标
+            n_jobs: 并行任务数
+            refit: 是否使用最佳参数重新拟合模型
+            verbose: 详细程度
+
+        返回:
+            best_params: 最佳参数
+        """
+        if verbose is None:
+            verbose = self.verbose
+
+        if verbose > 0:
+            logger.info(f"开始随机搜索 (n_iter={n_iter})...")
+
+        # 使用分层CV进行分类任务
+        if self.task_type == 'classification':
+            cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+        else:
+            cv_obj = KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+
+        # 设置默认评分指标
+        if scoring is None:
+            if self.task_type == 'classification':
+                if len(np.unique(y)) > 2:
+                    scoring = 'accuracy'
+                else:
+                    scoring = 'roc_auc'
+            else:
+                scoring = 'neg_mean_squared_error'
+
+        # 创建基础模型
+        if self.task_type == 'classification':
+            base_model = xgb.XGBClassifier(
+                objective=self.objective,
+                random_state=self.random_state,
+                verbosity=0,
+                use_label_encoder=False
+            )
+        else:
+            base_model = xgb.XGBRegressor(
+                objective=self.objective,
+                random_state=self.random_state,
+                verbosity=0
+            )
+
+        # 创建随机搜索对象
+        random_search = RandomizedSearchCV(
+            estimator=base_model,
+            param_distributions=param_distributions,
+            n_iter=n_iter,
+            scoring=scoring,
+            cv=cv_obj,
+            random_state=self.random_state,
+            n_jobs=n_jobs,
+            refit=refit,
+            verbose=max(0, verbose - 1)
+        )
+
+        # 执行随机搜索
+        start_time = time.time()
+        random_search.fit(X, y)
+        search_time = time.time() - start_time
+
+        # 提取最佳参数
+        best_params = random_search.best_params_
+        best_score = random_search.best_score_
+
+        # 更新模型参数
+        self.best_params = best_params
+        self.params.update(best_params)
+
+        if verbose > 0:
+            logger.info(f"随机搜索完成，耗时 {search_time:.2f} 秒")
+            logger.info(f"最佳参数: {best_params}")
+            logger.info(f"最佳{scoring}分数: {best_score:.4f}")
+
+        # 记录到MLflow
+        if self.experiment_tracking and mlflow.active_run():
+            mlflow.log_metric(f"random_search_best_{scoring}", best_score)
+            mlflow.log_metric("random_search_time", search_time)
+
+            for param, value in best_params.items():
+                mlflow.log_param(f"best_{param}", value)
+
+        # 如果refit为True，模型已经使用最佳参数重新训练
+        if refit:
+            self.model = random_search.best_estimator_
+
+            # 提取内部booster
+            if hasattr(self.model, 'get_booster'):
+                self.model = self.model.get_booster()
+
+            if verbose > 0:
+                logger.info("使用最佳参数重新拟合了模型")
+
+        return best_params, best_score
+
+    def hyperopt_optimize(self, X, y, param_space, max_evals=50, cv=5,
+                          scoring=None, early_stopping_rounds=None, verbose=None):
+        """
+        使用Hyperopt进行超参数优化
+
+        参数:
+            X: 特征数据
+            y: 目标变量
+            param_space: 参数空间
+            max_evals: 最大评估次数
+            cv: 交叉验证折数
+            scoring: 评分指标
+            early_stopping_rounds: 早停轮数
+            verbose: 详细程度
+
+        返回:
+            best_params: 最佳参数
+        """
+        if verbose is None:
+            verbose = self.verbose
+
+        if verbose > 0:
+            logger.info(f"开始Hyperopt优化 (max_evals={max_evals})...")
+
+        # 设置默认评分指标
+        if scoring is None:
+            if self.task_type == 'classification':
+                if len(np.unique(y)) > 2:
+                    scoring = 'accuracy'
+                else:
+                    scoring = 'roc_auc'
+            else:
+                scoring = 'neg_mean_squared_error'
+
+        # 使用分层CV进行分类任务
+        if self.task_type == 'classification':
+            cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+        else:
+            cv_obj = KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+
+        # 定义目标函数
+        def objective(params):
+            # 修正参数类型
+            for param, value in params.items():
+                if param in ['max_depth', 'min_child_weight', 'n_estimators']:
+                    params[param] = int(value)
+
+            # 当前参数集合
+            current_params = self.params.copy()
+            current_params.update(params)
+
+            # 创建模型
             if self.task_type == 'classification':
                 model = xgb.XGBClassifier(
-                    **self.params,
+                    **current_params,
                     random_state=self.random_state,
-                    verbosity=0 if verbose == 0 else 1,
+                    verbosity=0,
                     use_label_encoder=False
                 )
             else:
                 model = xgb.XGBRegressor(
-                    **self.params,
+                    **current_params,
                     random_state=self.random_state,
-                    verbosity=0 if verbose == 0 else 1
+                    verbosity=0
                 )
 
-            # 训练模型
-            if early_stopping_rounds is not None:
-                # 创建验证集
-                X_train, X_val, y_train, y_val = train_test_split(
-                    X, y, test_size=0.2, random_state=self.random_state,
-                    stratify=y if self.task_type == 'classification' else None
-                )
-
-                eval_set = [(X_val, y_val)]
-                model.fit(X_train, y_train, eval_set=eval_set, early_stopping_rounds=early_stopping_rounds)
-            else:
-                model.fit(X, y)
-
-            # 保存模型
-            self.model = model.get_booster() if hasattr(model, 'get_booster') else model
-
-            return best_params, best_score
-
-        def optuna_optimize(self, X, y, param_space_fn, n_trials=50, cv=5,
-                            scoring=None, early_stopping_rounds=None, verbose=None):
-            """
-            使用Optuna进行超参数优化
-
-            参数:
-                X: 特征数据
-                y: 目标变量
-                param_space_fn: 参数空间函数，接受trial对象并返回参数字典
-                n_trials: 试验次数
-                cv: 交叉验证折数
-                scoring: 评分指标
-                early_stopping_rounds: 早停轮数
-                verbose: 详细程度
-
-            返回:
-                best_params: 最佳参数
-            """
-            if verbose is None:
-                verbose = self.verbose
-
-            if verbose > 0:
-                logger.info(f"开始Optuna优化 (n_trials={n_trials})...")
-
-            # 设置默认评分指标
-            if scoring is None:
-                if self.task_type == 'classification':
-                    if len(np.unique(y)) > 2:
-                        scoring = 'accuracy'
-                    else:
-                        scoring = 'roc_auc'
-                else:
-                    scoring = 'neg_mean_squared_error'
-
-            # 使用分层CV进行分类任务
-            if self.task_type == 'classification':
-                cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state)
-            else:
-                cv_obj = KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
-
-            # 定义目标函数
-            def objective(trial):
-                # 获取参数
-                params = param_space_fn(trial)
-
-                # 当前参数集合
-                current_params = self.params.copy()
-                current_params.update(params)
-
-                # 创建模型
-                if self.task_type == 'classification':
-                    model = xgb.XGBClassifier(
-                        **current_params,
-                        random_state=self.random_state,
-                        verbosity=0,
-                        use_label_encoder=False
-                    )
-                else:
-                    model = xgb.XGBRegressor(
-                        **current_params,
-                        random_state=self.random_state,
-                        verbosity=0
-                    )
-
+            try:
                 # 交叉验证
                 cv_scores = []
                 for train_idx, val_idx in cv_obj.split(X, y):
@@ -3649,7 +3655,7 @@ class SuperXGBoost:
                                 score = f1_score(y_val, y_pred, average='macro')
                             elif scoring == 'log_loss':
                                 y_prob = model.predict_proba(X_val)
-                                score = -log_loss(y_val, y_prob)  # Optuna最大化
+                                score = -log_loss(y_val, y_prob)  # 取负值，因为hyperopt最小化
                             else:
                                 # 默认使用准确率
                                 score = accuracy_score(y_val, y_pred)
@@ -3666,7 +3672,7 @@ class SuperXGBoost:
                                 score = f1_score(y_val, y_pred)
                             elif scoring == 'log_loss':
                                 y_prob = model.predict_proba(X_val)
-                                score = -log_loss(y_val, y_prob)  # Optuna最大化
+                                score = -log_loss(y_val, y_prob)  # 取负值
                             else:
                                 # 默认使用AUC
                                 y_prob = model.predict_proba(X_val)[:, 1]
@@ -3675,499 +3681,983 @@ class SuperXGBoost:
                         # 回归
                         y_pred = model.predict(X_val)
                         if scoring == 'neg_mean_squared_error':
-                            score = -mean_squared_error(y_val, y_pred)  # Optuna最大化
+                            score = -mean_squared_error(y_val, y_pred)  # 取负值
                         elif scoring == 'neg_root_mean_squared_error':
-                            score = -np.sqrt(mean_squared_error(y_val, y_pred))  # Optuna最大化
+                            score = -np.sqrt(mean_squared_error(y_val, y_pred))  # 取负值
                         elif scoring == 'neg_mean_absolute_error':
-                            score = -mean_absolute_error(y_val, y_pred)  # Optuna最大化
+                            score = -mean_absolute_error(y_val, y_pred)  # 取负值
                         elif scoring == 'r2':
                             score = r2_score(y_val, y_pred)
                         else:
                             # 默认使用MSE
-                            score = -mean_squared_error(y_val, y_pred)  # Optuna最大化
+                            score = -mean_squared_error(y_val, y_pred)  # 取负值
 
                     cv_scores.append(score)
 
                 # 计算平均分数
                 mean_score = np.mean(cv_scores)
+                std_score = np.std(cv_scores)
 
-                # Optuna默认最大化目标函数
-                return mean_score
+                # 对于hyperopt来说，要最小化目标函数，所以对于越大越好的指标，要取负值
+                if scoring in ['accuracy', 'roc_auc', 'f1', 'f1_macro', 'r2']:
+                    hyperopt_score = -mean_score
+                else:
+                    # 对于已经是负值的指标（如neg_mean_squared_error），保持原样
+                    hyperopt_score = mean_score
 
-            # 创建学习器
-            sampler = optuna.samplers.TPESampler(seed=self.random_state)
-            study = optuna.create_study(
-                direction='maximize',
-                sampler=sampler
+                return {
+                    'loss': hyperopt_score,
+                    'status': STATUS_OK,
+                    'mean_score': mean_score,
+                    'std_score': std_score,
+                    'params': params
+                }
+            except Exception as e:
+                if verbose > 1:
+                    logger.debug(f"评估参数时出错: {e}")
+                return {
+                    'loss': float('inf'),
+                    'status': STATUS_OK,
+                    'error': str(e),
+                    'params': params
+                }
+
+        # 执行优化
+        start_time = time.time()
+        trials = Trials()
+        best = fmin(
+            fn=objective,
+            space=param_space,
+            algo=tpe.suggest,
+            max_evals=max_evals,
+            trials=trials,
+            verbose=verbose > 1,
+            rstate=np.random.RandomState(self.random_state)
+        )
+
+        # 获取最佳参数
+        best_params = space_eval(param_space, best)
+
+        # 修正参数类型
+        for param, value in best_params.items():
+            if param in ['max_depth', 'min_child_weight', 'n_estimators']:
+                best_params[param] = int(value)
+
+        # 获取最佳分数
+        best_trial_idx = np.argmin([t['result']['loss'] for t in trials.trials if 'result' in t])
+        best_score = trials.trials[best_trial_idx]['result'].get('mean_score', float('inf'))
+
+        # 更新模型参数
+        self.best_params = best_params
+        self.params.update(best_params)
+
+        search_time = time.time() - start_time
+
+        if verbose > 0:
+            logger.info(f"Hyperopt优化完成，耗时 {search_time:.2f} 秒")
+            logger.info(f"最佳参数: {best_params}")
+            logger.info(f"最佳{scoring}分数: {best_score:.4f}")
+
+        # 记录到MLflow
+        if self.experiment_tracking and mlflow.active_run():
+            mlflow.log_metric(f"hyperopt_best_{scoring}", best_score)
+            mlflow.log_metric("hyperopt_time", search_time)
+
+            for param, value in best_params.items():
+                mlflow.log_param(f"best_{param}", value)
+
+        # 使用最佳参数重新训练模型
+        if self.task_type == 'classification':
+            model = xgb.XGBClassifier(
+                **self.params,
+                random_state=self.random_state,
+                verbosity=0 if verbose == 0 else 1,
+                use_label_encoder=False
+            )
+        else:
+            model = xgb.XGBRegressor(
+                **self.params,
+                random_state=self.random_state,
+                verbosity=0 if verbose == 0 else 1
             )
 
-            # 执行优化
-            start_time = time.time()
-            study.optimize(
-                objective,
-                n_trials=n_trials,
-                show_progress_bar=verbose > 0
+        # 训练模型
+        if early_stopping_rounds is not None:
+            # 创建验证集
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=0.2, random_state=self.random_state,
+                stratify=y if self.task_type == 'classification' else None
             )
 
-            # 获取最佳参数
-            best_params = study.best_params
-            best_score = study.best_value
+            eval_set = [(X_val, y_val)]
+            model.fit(X_train, y_train, eval_set=eval_set, early_stopping_rounds=early_stopping_rounds)
+        else:
+            model.fit(X, y)
 
-            # 更新模型参数
-            self.best_params = best_params
-            self.params.update(best_params)
+        # 保存模型
+        self.model = model.get_booster() if hasattr(model, 'get_booster') else model
 
-            search_time = time.time() - start_time
+        return best_params, best_score
 
-            if verbose > 0:
-                logger.info(f"Optuna优化完成，耗时 {search_time:.2f} 秒")
-                logger.info(f"最佳参数: {best_params}")
-                logger.info(f"最佳{scoring}分数: {best_score:.4f}")
+    def optuna_optimize(self, X, y, param_space_fn, n_trials=50, cv=5,
+                        scoring=None, early_stopping_rounds=None, verbose=None):
+        """
+        使用Optuna进行超参数优化
 
-                # 打印参数重要性
-                try:
-                    param_importance = optuna.importance.get_param_importances(study)
-                    if param_importance:
-                        logger.info("参数重要性:")
-                        for param, importance in param_importance.items():
-                            logger.info(f"  - {param}: {importance:.4f}")
-                except Exception as e:
-                    if verbose > 1:
-                        logger.debug(f"计算参数重要性时出错: {e}")
+        参数:
+            X: 特征数据
+            y: 目标变量
+            param_space_fn: 参数空间函数，接受trial对象并返回参数字典
+            n_trials: 试验次数
+            cv: 交叉验证折数
+            scoring: 评分指标
+            early_stopping_rounds: 早停轮数
+            verbose: 详细程度
 
-            # 记录到MLflow
-            if self.experiment_tracking and mlflow.active_run():
-                mlflow.log_metric(f"optuna_best_{scoring}", best_score)
-                mlflow.log_metric("optuna_time", search_time)
+        返回:
+            best_params: 最佳参数
+        """
+        if verbose is None:
+            verbose = self.verbose
 
-                for param, value in best_params.items():
-                    mlflow.log_param(f"best_{param}", value)
+        if verbose > 0:
+            logger.info(f"开始Optuna优化 (n_trials={n_trials})...")
 
-                # 记录参数重要性
-                try:
-                    param_importance = optuna.importance.get_param_importances(study)
-                    for param, importance in param_importance.items():
-                        mlflow.log_metric(f"param_importance_{param}", importance)
-                except:
-                    pass
+        # 设置默认评分指标
+        if scoring is None:
+            if self.task_type == 'classification':
+                if len(np.unique(y)) > 2:
+                    scoring = 'accuracy'
+                else:
+                    scoring = 'roc_auc'
+            else:
+                scoring = 'neg_mean_squared_error'
 
-            # 使用最佳参数重新训练模型
+        # 使用分层CV进行分类任务
+        if self.task_type == 'classification':
+            cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+        else:
+            cv_obj = KFold(n_splits=cv, shuffle=True, random_state=self.random_state)
+
+        # 定义目标函数
+        def objective(trial):
+            # 获取参数
+            params = param_space_fn(trial)
+
+            # 当前参数集合
+            current_params = self.params.copy()
+            current_params.update(params)
+
+            # 创建模型
             if self.task_type == 'classification':
                 model = xgb.XGBClassifier(
-                    **self.params,
+                    **current_params,
                     random_state=self.random_state,
-                    verbosity=0 if verbose == 0 else 1,
+                    verbosity=0,
                     use_label_encoder=False
                 )
             else:
                 model = xgb.XGBRegressor(
-                    **self.params,
+                    **current_params,
                     random_state=self.random_state,
-                    verbosity=0 if verbose == 0 else 1
+                    verbosity=0
                 )
 
-            # 训练模型
-            if early_stopping_rounds is not None:
-                # 创建验证集
-                X_train, X_val, y_train, y_val = train_test_split(
-                    X, y, test_size=0.2, random_state=self.random_state,
-                    stratify=y if self.task_type == 'classification' else None
-                )
+            # 交叉验证
+            cv_scores = []
+            for train_idx, val_idx in cv_obj.split(X, y):
+                X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+                y_train, y_val = y[train_idx], y[val_idx]
 
+                # 训练模型
                 eval_set = [(X_val, y_val)]
-                model.fit(X_train, y_train, eval_set=eval_set, early_stopping_rounds=early_stopping_rounds)
-            else:
-                model.fit(X, y)
+                model.fit(
+                    X_train, y_train,
+                    eval_set=eval_set,
+                    early_stopping_rounds=early_stopping_rounds,
+                    verbose=False
+                )
 
-            # 保存模型
-            self.model = model.get_booster() if hasattr(model, 'get_booster') else model
-
-            # 保存学习曲线图
-            if verbose > 0 and early_stopping_rounds is not None and hasattr(model, 'evals_result'):
-                try:
-                    # 创建学习曲线图
-                    fig, ax = plt.subplots(figsize=(10, 6))
-                    results = model.evals_result()
-
-                    for eval_name, eval_metrics in results.items():
-                        for metric_name, metric_values in eval_metrics.items():
-                            ax.plot(range(len(metric_values)), metric_values, label=f'{eval_name}-{metric_name}')
-
-                    ax.set_xlabel('迭代次数')
-                    ax.set_ylabel('指标值')
-                    ax.set_title('学习曲线')
-                    ax.legend()
-                    ax.grid(True)
-
-                    # 保存到MLflow
-                    if self.experiment_tracking and mlflow.active_run():
-                        mlflow.log_figure(fig, "learning_curve.png")
-
-                    plt.close(fig)
-                except Exception as e:
-                    if verbose > 1:
-                        logger.debug(f"绘制学习曲线时出错: {e}")
-
-            return best_params, best_score
-
-        def plot_feature_importance(self, top_n=20, importance_type='gain', figsize=(12, 8), plot=True):
-            """
-            绘制特征重要性
-
-            参数:
-                top_n: 显示前N个重要特征
-                importance_type: 重要性类型，'gain'、'weight'或'cover'
-                figsize: 图表大小
-                plot: 是否立即绘制
-
-            返回:
-                fig: matplotlib图表对象
-            """
-            if self.model is None:
-                raise ValueError("模型尚未训练，请先调用fit方法")
-
-            # 获取特征重要性
-            try:
-                importances = self.model.get_score(importance_type=importance_type)
-            except Exception as e:
-                if isinstance(self.model, (xgb.XGBClassifier, xgb.XGBRegressor)):
-                    # scikit-learn接口
-                    if hasattr(self.model, 'feature_importances_'):
-                        if self.feature_names is not None:
-                            importances = {name: imp for name, imp in
-                                           zip(self.feature_names, self.model.feature_importances_)}
+                # 评估模型
+                if self.task_type == 'classification':
+                    if 'multi' in self.objective:
+                        # 多分类
+                        y_pred = model.predict(X_val)
+                        if scoring == 'accuracy':
+                            score = accuracy_score(y_val, y_pred)
+                        elif scoring == 'f1_macro':
+                            score = f1_score(y_val, y_pred, average='macro')
+                        elif scoring == 'log_loss':
+                            y_prob = model.predict_proba(X_val)
+                            score = -log_loss(y_val, y_prob)  # Optuna最大化
                         else:
-                            importances = {f'f{i}': imp for i, imp in enumerate(self.model.feature_importances_)}
+                            # 默认使用准确率
+                            score = accuracy_score(y_val, y_pred)
                     else:
-                        raise ValueError(f"无法获取特征重要性: {e}")
+                        # 二分类
+                        if scoring == 'roc_auc':
+                            y_prob = model.predict_proba(X_val)[:, 1]
+                            score = roc_auc_score(y_val, y_prob)
+                        elif scoring == 'accuracy':
+                            y_pred = model.predict(X_val)
+                            score = accuracy_score(y_val, y_pred)
+                        elif scoring == 'f1':
+                            y_pred = model.predict(X_val)
+                            score = f1_score(y_val, y_pred)
+                        elif scoring == 'log_loss':
+                            y_prob = model.predict_proba(X_val)
+                            score = -log_loss(y_val, y_prob)  # Optuna最大化
+                        else:
+                            # 默认使用AUC
+                            y_prob = model.predict_proba(X_val)[:, 1]
+                            score = roc_auc_score(y_val, y_prob)
                 else:
-                    raise ValueError(f"无法获取特征重要性: {e}")
+                    # 回归
+                    y_pred = model.predict(X_val)
+                    if scoring == 'neg_mean_squared_error':
+                        score = -mean_squared_error(y_val, y_pred)  # Optuna最大化
+                    elif scoring == 'neg_root_mean_squared_error':
+                        score = -np.sqrt(mean_squared_error(y_val, y_pred))  # Optuna最大化
+                    elif scoring == 'neg_mean_absolute_error':
+                        score = -mean_absolute_error(y_val, y_pred)  # Optuna最大化
+                    elif scoring == 'r2':
+                        score = r2_score(y_val, y_pred)
+                    else:
+                        # 默认使用MSE
+                        score = -mean_squared_error(y_val, y_pred)  # Optuna最大化
 
-            # 转换为DataFrame
-            importance_df = pd.DataFrame({
-                'Feature': list(importances.keys()),
-                'Importance': list(importances.values())
-            })
+                cv_scores.append(score)
 
-            # 排序
-            importance_df = importance_df.sort_values('Importance', ascending=False)
+            # 计算平均分数
+            mean_score = np.mean(cv_scores)
 
-            # 限制特征数量
-            if top_n is not None:
-                importance_df = importance_df.head(top_n)
+            # Optuna默认最大化目标函数
+            return mean_score
 
-            # 创建图表
-            fig, ax = plt.subplots(figsize=figsize)
+        # 创建学习器
+        sampler = optuna.samplers.TPESampler(seed=self.random_state)
+        study = optuna.create_study(
+            direction='maximize',
+            sampler=sampler
+        )
 
-            # 绘制水平条形图
-            bars = ax.barh(
-                importance_df['Feature'][::-1],
-                importance_df['Importance'][::-1],
-                color='skyblue',
-                edgecolor='navy',
-                alpha=0.8
+        # 执行优化
+        start_time = time.time()
+        study.optimize(
+            objective,
+            n_trials=n_trials,
+            show_progress_bar=verbose > 0
+        )
+
+        # 获取最佳参数
+        best_params = study.best_params
+        best_score = study.best_value
+
+        # 更新模型参数
+        self.best_params = best_params
+        self.params.update(best_params)
+
+        search_time = time.time() - start_time
+
+        if verbose > 0:
+            logger.info(f"Optuna优化完成，耗时 {search_time:.2f} 秒")
+            logger.info(f"最佳参数: {best_params}")
+            logger.info(f"最佳{scoring}分数: {best_score:.4f}")
+
+            # 打印参数重要性
+            try:
+                param_importance = optuna.importance.get_param_importances(study)
+                if param_importance:
+                    logger.info("参数重要性:")
+                    for param, importance in param_importance.items():
+                        logger.info(f"  - {param}: {importance:.4f}")
+            except Exception as e:
+                if verbose > 1:
+                    logger.debug(f"计算参数重要性时出错: {e}")
+
+        # 记录到MLflow
+        if self.experiment_tracking and mlflow.active_run():
+            mlflow.log_metric(f"optuna_best_{scoring}", best_score)
+            mlflow.log_metric("optuna_time", search_time)
+
+            for param, value in best_params.items():
+                mlflow.log_param(f"best_{param}", value)
+
+            # 记录参数重要性
+            try:
+                param_importance = optuna.importance.get_param_importances(study)
+                for param, importance in param_importance.items():
+                    mlflow.log_metric(f"param_importance_{param}", importance)
+            except:
+                pass
+
+        # 使用最佳参数重新训练模型
+        if self.task_type == 'classification':
+            model = xgb.XGBClassifier(
+                **self.params,
+                random_state=self.random_state,
+                verbosity=0 if verbose == 0 else 1,
+                use_label_encoder=False
+            )
+        else:
+            model = xgb.XGBRegressor(
+                **self.params,
+                random_state=self.random_state,
+                verbosity=0 if verbose == 0 else 1
             )
 
-            # 添加标题和标签
-            ax.set_title(f'特征重要性 (前{len(importance_df)}个特征)', fontsize=14)
-            ax.set_xlabel(f'重要性 ({importance_type})', fontsize=12)
-            ax.set_ylabel('特征', fontsize=12)
+        # 训练模型
+        if early_stopping_rounds is not None:
+            # 创建验证集
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=0.2, random_state=self.random_state,
+                stratify=y if self.task_type == 'classification' else None
+            )
 
-            # 添加数值标签
-            for bar in bars:
-                width = bar.get_width()
+            eval_set = [(X_val, y_val)]
+            model.fit(X_train, y_train, eval_set=eval_set, early_stopping_rounds=early_stopping_rounds)
+        else:
+            model.fit(X, y)
+
+        # 保存模型
+        self.model = model.get_booster() if hasattr(model, 'get_booster') else model
+
+        # 保存学习曲线图
+        if verbose > 0 and early_stopping_rounds is not None and hasattr(model, 'evals_result'):
+            try:
+                # 创建学习曲线图
+                fig, ax = plt.subplots(figsize=(10, 6))
+                results = model.evals_result()
+
+                for eval_name, eval_metrics in results.items():
+                    for metric_name, metric_values in eval_metrics.items():
+                        ax.plot(range(len(metric_values)), metric_values, label=f'{eval_name}-{metric_name}')
+
+                ax.set_xlabel('迭代次数')
+                ax.set_ylabel('指标值')
+                ax.set_title('学习曲线')
+                ax.legend()
+                ax.grid(True)
+
+                # 保存到MLflow
+                if self.experiment_tracking and mlflow.active_run():
+                    mlflow.log_figure(fig, "learning_curve.png")
+
+                plt.close(fig)
+            except Exception as e:
+                if verbose > 1:
+                    logger.debug(f"绘制学习曲线时出错: {e}")
+
+        return best_params, best_score
+
+    def plot_feature_importance(self, top_n=20, importance_type='gain', figsize=(12, 8)):
+        """
+        绘制特征重要性
+        【修复】移除了plot参数，函数总是返回图表对象
+
+        参数:
+            top_n: 显示前N个重要特征
+            importance_type: 重要性类型，'gain'、'weight'或'cover'
+            figsize: 图表大小
+
+        返回:
+            fig: matplotlib图表对象
+        """
+        if self.model is None:
+            raise ValueError("模型尚未训练，请先调用fit方法")
+
+        # 获取特征重要性
+        try:
+            importances = self.model.get_score(importance_type=importance_type)
+        except Exception as e:
+            if isinstance(self.model, (xgb.XGBClassifier, xgb.XGBRegressor)):
+                # scikit-learn接口
+                if hasattr(self.model, 'feature_importances_'):
+                    if self.feature_names is not None:
+                        importances = {name: imp for name, imp in
+                                       zip(self.feature_names, self.model.feature_importances_)}
+                    else:
+                        importances = {f'f{i}': imp for i, imp in enumerate(self.model.feature_importances_)}
+                else:
+                    raise ValueError(f"无法获取特征重要性: {e}")
+            else:
+                raise ValueError(f"无法获取特征重要性: {e}")
+
+        if not importances:
+            raise ValueError("没有可用的特征重要性数据")
+
+        # 转换为DataFrame
+        importance_df = pd.DataFrame({
+            'Feature': list(importances.keys()),
+            'Importance': list(importances.values())
+        })
+
+        # 排序
+        importance_df = importance_df.sort_values('Importance', ascending=False)
+
+        # 限制特征数量
+        if top_n is not None:
+            importance_df = importance_df.head(top_n)
+
+        # 创建图表
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # 绘制水平条形图
+        bars = ax.barh(
+            importance_df['Feature'][::-1],
+            importance_df['Importance'][::-1],
+            color='skyblue',
+            edgecolor='navy',
+            alpha=0.8
+        )
+
+        # 添加标题和标签
+        ax.set_title(f'特征重要性 (前{len(importance_df)}个特征)', fontsize=14)
+        ax.set_xlabel(f'重要性 ({importance_type})', fontsize=12)
+        ax.set_ylabel('特征', fontsize=12)
+
+        # 添加数值标签
+        for bar in bars:
+            width = bar.get_width()
+            if width > 0:  # 避免为零的情况
                 label_x_pos = width * 1.01
                 ax.text(label_x_pos, bar.get_y() + bar.get_height() / 2, f'{width:.4f}',
                         va='center', fontsize=10)
 
-            # 添加网格线
-            ax.grid(axis='x', linestyle='--', alpha=0.6)
+        # 添加网格线
+        ax.grid(axis='x', linestyle='--', alpha=0.6)
 
-            # 调整布局
-            plt.tight_layout()
+        # 调整布局
+        plt.tight_layout()
 
-            # 立即绘制或返回图表
-            if plot:
-                plt.show()
+        return fig
 
-            return fig
+    def plot_learning_curve(self, metric='auto', figsize=(12, 6)):
+        """
+        绘制学习曲线
+        【修复】移除了plot参数，函数总是返回图表对象
 
-        def plot_tree(self, tree_index=0, rankdir='LR', figsize=(20, 10)):
-            """
-            绘制决策树
+        参数:
+            metric: 要绘制的指标
+            figsize: 图表大小
 
-            参数:
-                tree_index: 要绘制的树索引
-                rankdir: 图形方向，'LR'为水平，'TB'为垂直
-                figsize: 图表大小
+        返回:
+            fig: matplotlib图表对象
+        """
+        if not self.training_history:
+            raise ValueError("没有训练历史数据")
 
-            返回:
-                fig: matplotlib图表对象
-            """
-            if self.model is None:
-                raise ValueError("模型尚未训练，请先调用fit方法")
+        # 创建图表
+        fig, ax = plt.subplots(figsize=figsize)
 
-            # 创建图表
-            fig, ax = plt.subplots(figsize=figsize)
+        # 如果未指定指标，根据任务类型选择默认指标
+        if metric == 'auto':
+            available_metrics = []
+            for eval_key in self.training_history.keys():
+                available_metrics.extend(self.training_history[eval_key].keys())
 
-            # 使用xgboost的plot_tree函数
-            xgb.plot_tree(
-                self.model,
-                num_trees=tree_index,
-                rankdir=rankdir,
-                ax=ax
-            )
-
-            # 添加标题
-            ax.set_title(f'决策树 #{tree_index}', fontsize=14)
-
-            # 调整布局
-            plt.tight_layout()
-
-            return fig
-
-        def plot_learning_curve(self, metric='auto', figsize=(12, 6)):
-            """
-            绘制学习曲线
-
-            参数:
-                metric: 要绘制的指标
-                figsize: 图表大小
-
-            返回:
-                fig: matplotlib图表对象
-            """
-            if not self.training_history:
-                raise ValueError("没有训练历史数据")
-
-            # 创建图表
-            fig, ax = plt.subplots(figsize=figsize)
-
-            # 如果未指定指标，根据任务类型选择默认指标
-            if metric == 'auto':
-                if self.task_type == 'classification':
-                    if 'multi' in self.objective:
-                        if 'eval_0-mlogloss' in self.training_history:
-                            metric = 'mlogloss'
-                        else:
-                            metric = 'merror'
+            if self.task_type == 'classification':
+                if 'multi' in self.objective:
+                    if any('mlogloss' in m for m in available_metrics):
+                        metric = 'mlogloss'
+                    elif any('merror' in m for m in available_metrics):
+                        metric = 'merror'
                     else:
-                        if 'eval_0-logloss' in self.training_history:
-                            metric = 'logloss'
-                        else:
-                            metric = 'error'
+                        metric = available_metrics[0] if available_metrics else 'loss'
                 else:
-                    if 'eval_0-rmse' in self.training_history:
-                        metric = 'rmse'
+                    if any('logloss' in m for m in available_metrics):
+                        metric = 'logloss'
+                    elif any('error' in m for m in available_metrics):
+                        metric = 'error'
                     else:
-                        metric = 'mae'
+                        metric = available_metrics[0] if available_metrics else 'loss'
+            else:
+                if any('rmse' in m for m in available_metrics):
+                    metric = 'rmse'
+                elif any('mae' in m for m in available_metrics):
+                    metric = 'mae'
+                else:
+                    metric = available_metrics[0] if available_metrics else 'loss'
 
-            # 收集所有指标
-            metrics_to_plot = []
+        # 收集所有指标
+        metrics_to_plot = []
+        for eval_key in self.training_history.keys():
+            for metric_key in self.training_history[eval_key].keys():
+                if metric.lower() in metric_key.lower():
+                    metrics_to_plot.append((eval_key, metric_key))
+
+        # 如果没有匹配的指标，使用所有可用指标
+        if not metrics_to_plot:
             for eval_key in self.training_history.keys():
                 for metric_key in self.training_history[eval_key].keys():
-                    if metric in metric_key:
-                        metrics_to_plot.append((eval_key, metric_key))
+                    metrics_to_plot.append((eval_key, metric_key))
 
-            # 绘制学习曲线
-            for eval_key, metric_key in metrics_to_plot:
-                values = self.training_history[eval_key][metric_key]
-                iterations = range(1, len(values) + 1)
+        # 绘制学习曲线
+        for eval_key, metric_key in metrics_to_plot:
+            values = self.training_history[eval_key][metric_key]
+            iterations = range(1, len(values) + 1)
 
-                ax.plot(iterations, values, label=f'{eval_key}-{metric_key}')
+            ax.plot(iterations, values, label=f'{eval_key}-{metric_key}', marker='o', markersize=3)
 
-            # 添加标题和标签
-            ax.set_title(f'学习曲线 ({metric})', fontsize=14)
-            ax.set_xlabel('迭代次数', fontsize=12)
-            ax.set_ylabel('指标值', fontsize=12)
+        # 添加标题和标签
+        ax.set_title(f'学习曲线', fontsize=14)
+        ax.set_xlabel('迭代次数', fontsize=12)
+        ax.set_ylabel('指标值', fontsize=12)
 
-            # 添加网格和图例
-            ax.grid(True, linestyle='--', alpha=0.6)
+        # 添加网格和图例
+        ax.grid(True, linestyle='--', alpha=0.6)
+        if metrics_to_plot:
             ax.legend(loc='best')
 
-            # 调整布局
-            plt.tight_layout()
+        # 调整布局
+        plt.tight_layout()
 
-            return fig
+        return fig
 
-        def plot_confusion_matrix(self, y_true, y_pred, labels=None, normalize=None,
-                                  title='混淆矩阵', cmap=plt.cm.Blues, figsize=(10, 8)):
-            """
-            绘制混淆矩阵
+    def plot_confusion_matrix(self, y_true, y_pred, labels=None, normalize=None,
+                              title='混淆矩阵', cmap=plt.cm.Blues, figsize=(10, 8)):
+        """
+        绘制混淆矩阵
+        【修复】移除了plot参数，函数总是返回图表对象
 
-            参数:
-                y_true: 真实标签
-                y_pred: 预测标签
-                labels: 类别标签
-                normalize: 是否归一化，'true'、'pred'、'all'或None
-                title: 图表标题
-                cmap: 颜色映射
-                figsize: 图表大小
+        参数:
+            y_true: 真实标签
+            y_pred: 预测标签
+            labels: 类别标签
+            normalize: 是否归一化，'true'、'pred'、'all'或None
+            title: 图表标题
+            cmap: 颜色映射
+            figsize: 图表大小
 
-            返回:
-                fig: matplotlib图表对象
-            """
-            if self.task_type != 'classification':
-                raise ValueError("混淆矩阵仅适用于分类任务")
+        返回:
+            fig: matplotlib图表对象
+        """
+        if self.task_type != 'classification':
+            raise ValueError("混淆矩阵仅适用于分类任务")
 
-            # 计算混淆矩阵
-            cm = confusion_matrix(y_true, y_pred, labels=labels)
+        # 计算混淆矩阵
+        cm = confusion_matrix(y_true, y_pred, labels=labels)
 
-            # 确定类别标签
-            if labels is None:
-                labels = np.unique(np.concatenate((y_true, y_pred)))
+        # 确定类别标签
+        if labels is None:
+            labels = np.unique(np.concatenate((y_true, y_pred)))
 
-            # 归一化
-            if normalize == 'true':
-                cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-                title = title + ' (按真实标签归一化)'
-            elif normalize == 'pred':
-                cm = cm.astype('float') / cm.sum(axis=0)[np.newaxis, :]
-                title = title + ' (按预测标签归一化)'
-            elif normalize == 'all':
-                cm = cm.astype('float') / cm.sum()
-                title = title + ' (全局归一化)'
+        # 归一化
+        if normalize == 'true':
+            cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+            title = title + ' (按真实标签归一化)'
+        elif normalize == 'pred':
+            cm = cm.astype('float') / cm.sum(axis=0)[np.newaxis, :]
+            title = title + ' (按预测标签归一化)'
+        elif normalize == 'all':
+            cm = cm.astype('float') / cm.sum()
+            title = title + ' (全局归一化)'
 
-            # 创建图表
-            fig, ax = plt.subplots(figsize=figsize)
+        # 创建图表
+        fig, ax = plt.subplots(figsize=figsize)
 
-            # 显示混淆矩阵
-            im = ax.imshow(cm, interpolation='nearest', cmap=cmap)
-            plt.colorbar(im, ax=ax)
+        # 显示混淆矩阵
+        im = ax.imshow(cm, interpolation='nearest', cmap=cmap)
+        fig.colorbar(im, ax=ax)
 
-            # 添加标题和轴标签
-            ax.set_title(title, fontsize=14)
-            ax.set_xlabel('预测标签', fontsize=12)
-            ax.set_ylabel('真实标签', fontsize=12)
+        # 添加标题和轴标签
+        ax.set_title(title, fontsize=14)
+        ax.set_xlabel('预测标签', fontsize=12)
+        ax.set_ylabel('真实标签', fontsize=12)
 
-            # 设置刻度标签
-            tick_marks = np.arange(len(labels))
-            ax.set_xticks(tick_marks)
-            ax.set_yticks(tick_marks)
-            ax.set_xticklabels(labels)
-            ax.set_yticklabels(labels)
+        # 设置刻度标签
+        tick_marks = np.arange(len(labels))
+        ax.set_xticks(tick_marks)
+        ax.set_yticks(tick_marks)
+        ax.set_xticklabels(labels)
+        ax.set_yticklabels(labels)
 
-            # 旋转x轴标签
-            plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+        # 旋转x轴标签
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
 
-            # 添加数值标签
-            fmt = '.2f' if normalize else 'd'
-            thresh = cm.max() / 2.
-            for i in range(cm.shape[0]):
-                for j in range(cm.shape[1]):
-                    ax.text(j, i, format(cm[i, j], fmt),
-                            ha="center", va="center",
-                            color="white" if cm[i, j] > thresh else "black")
+        # 添加数值标签
+        fmt = '.2f' if normalize else 'd'
+        thresh = cm.max() / 2.
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                ax.text(j, i, format(cm[i, j], fmt),
+                        ha="center", va="center",
+                        color="white" if cm[i, j] > thresh else "black")
 
-            # 调整布局
-            fig.tight_layout()
+        # 调整布局
+        fig.tight_layout()
 
-            return fig
+        return fig
 
-        def plot_roc_curve(self, y_true, y_prob, class_index=None, figsize=(10, 8)):
-            """
-            绘制ROC曲线
+    def plot_roc_curve(self, y_true, y_prob, class_index=None, figsize=(10, 8)):
+        """
+        绘制ROC曲线 - 最小化修复版本
+        只修复现有问题，不添加新函数
 
-            参数:
-                y_true: 真实标签
-                y_prob: 预测概率
-                class_index: 多分类问题中要绘制的类别索引
-                figsize: 图表大小
+        参数:
+            y_true: 真实标签
+            y_prob: 预测概率
+            class_index: 多分类问题中要绘制的类别索引
+            figsize: 图表大小
 
-            返回:
-                fig: matplotlib图表对象
-            """
-            if self.task_type != 'classification':
-                raise ValueError("ROC曲线仅适用于分类任务")
+        返回:
+            fig: matplotlib图表对象
+        """
+        if self.task_type != 'classification':
+            raise ValueError("ROC曲线仅适用于分类任务")
 
-            # 创建图表
-            fig, ax = plt.subplots(figsize=figsize)
+        # 【修复】检查params属性，如果不存在就重建
+        if not hasattr(self, 'params'):
+            if hasattr(self, 'default_params'):
+                self.params = self.default_params.copy()
+            else:
+                # 创建基本的params
+                self.params = {
+                    'objective': getattr(self, 'objective', 'binary:logistic'),
+                    'random_state': getattr(self, 'random_state', 42)
+                }
 
-            # 处理多分类
-            if 'multi' in self.objective:
-                if class_index is None:
-                    # 为每个类别绘制ROC曲线
-                    y_true_bin = label_binarize(y_true, classes=np.unique(y_true))
-                    n_classes = y_true_bin.shape[1]
+        # 【修复】确保objective属性存在
+        if not hasattr(self, 'objective'):
+            self.objective = self.params.get('objective', 'binary:logistic')
 
-                    # 对每个类别计算ROC曲线和AUC
-                    for i in range(n_classes):
-                        fpr, tpr, _ = roc_curve(y_true_bin[:, i], y_prob[:, i])
-                        roc_auc = auc(fpr, tpr)
+        # 创建图表
+        fig, ax = plt.subplots(figsize=figsize)
 
-                        # 绘制ROC曲线
-                        ax.plot(fpr, tpr, lw=2,
-                                label=f'类别 {i} (AUC = {roc_auc:.3f})')
-                else:
-                    # 绘制指定类别的ROC曲线
-                    y_true_bin = label_binarize(y_true, classes=np.unique(y_true))
+        # 处理多分类
+        if 'multi' in self.objective:
+            if class_index is None:
+                # 为每个类别绘制ROC曲线
+                y_true_bin = label_binarize(y_true, classes=np.unique(y_true))
+                n_classes = y_true_bin.shape[1]
 
-                    fpr, tpr, _ = roc_curve(y_true_bin[:, class_index], y_prob[:, class_index])
+                # 对每个类别计算ROC曲线和AUC
+                for i in range(n_classes):
+                    fpr, tpr, _ = roc_curve(y_true_bin[:, i], y_prob[:, i])
                     roc_auc = auc(fpr, tpr)
 
                     # 绘制ROC曲线
                     ax.plot(fpr, tpr, lw=2,
-                            label=f'类别 {class_index} (AUC = {roc_auc:.3f})')
+                            label=f'类别 {i} (AUC = {roc_auc:.3f})')
             else:
-                # 二分类
-                if isinstance(y_prob, np.ndarray) and len(y_prob.shape) > 1:
-                    y_prob = y_prob[:, 1]
+                # 绘制指定类别的ROC曲线
+                y_true_bin = label_binarize(y_true, classes=np.unique(y_true))
 
-                fpr, tpr, _ = roc_curve(y_true, y_prob)
+                fpr, tpr, _ = roc_curve(y_true_bin[:, class_index], y_prob[:, class_index])
                 roc_auc = auc(fpr, tpr)
 
                 # 绘制ROC曲线
                 ax.plot(fpr, tpr, lw=2,
-                        label=f'ROC曲线 (AUC = {roc_auc:.3f})')
+                        label=f'类别 {class_index} (AUC = {roc_auc:.3f})')
+        else:
+            # 二分类
+            if isinstance(y_prob, np.ndarray) and len(y_prob.shape) > 1:
+                y_prob = y_prob[:, 1] if y_prob.shape[1] > 1 else y_prob.flatten()
 
-            # 绘制基准线
-            ax.plot([0, 1], [0, 1], 'k--', lw=2)
+            fpr, tpr, _ = roc_curve(y_true, y_prob)
+            roc_auc = auc(fpr, tpr)
 
-            # 设置轴范围
-            ax.set_xlim([0.0, 1.0])
-            ax.set_ylim([0.0, 1.05])
+            # 绘制ROC曲线
+            ax.plot(fpr, tpr, lw=2,
+                    label=f'ROC曲线 (AUC = {roc_auc:.3f})')
 
-            # 添加标题和标签
-            ax.set_title('接收者操作特征曲线', fontsize=14)
-            ax.set_xlabel('假正例率', fontsize=12)
-            ax.set_ylabel('真正例率', fontsize=12)
+        # 绘制基准线
+        ax.plot([0, 1], [0, 1], 'k--', lw=2, label='随机分类器')
 
-            # 添加网格和图例
-            ax.grid(True, linestyle='--', alpha=0.6)
-            ax.legend(loc='lower right')
+        # 设置轴范围
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
 
-            # 加载数据
-            from sklearn.datasets import load_breast_cancer
-            from sklearn.model_selection import train_test_split
+        # 添加标题和标签
+        ax.set_title('接收者操作特征曲线', fontsize=14)
+        ax.set_xlabel('假正例率', fontsize=12)
+        ax.set_ylabel('真正例率', fontsize=12)
 
-            data = load_breast_cancer()
-            X, y = pd.DataFrame(data.data, columns=data.feature_names), data.target
+        # 添加网格和图例
+        ax.grid(True, linestyle='--', alpha=0.6)
+        ax.legend(loc='lower right')
 
-            # 初始化并自动调优
-            model = SuperXGBoost(
-                task_type='classification',
-                gpu_acceleration=True,
-                experiment_tracking=True,
-                auto_feature_engineering=True
-            )
+        # 调整布局
+        plt.tight_layout()
 
-            # 自动数据准备和特征工程
-            X_train, X_test, y_train, y_test = model.prepare_data(
-                X, y,
-                preprocessing=True,
-                feature_engineering=True,
-                handle_outliers=True
-            )
+        return fig
 
-            # 模型调优与训练
-            best_params = model.auto_tune(X_train, y_train, method='optuna', n_trials=50)
-            model.fit(X_train, y_train, eval_set=[(X_test, y_test)], early_stopping_rounds=20)
+    def plot_tree(self, tree_index=0, rankdir='LR', figsize=(20, 10)):
+        """
+        绘制决策树
 
-            # 模型评估和解释
-            eval_results = model.evaluate(X_test, y_test)
-            model.explain_model(X_test)
+        参数:
+            tree_index: 要绘制的树索引
+            rankdir: 图形方向，'LR'为水平，'TB'为垂直
+            figsize: 图表大小
 
-            # 保存与部署
-            model.save_model('super_xgboost_model.json')
-            model.save_report('model_report.md')
-            model.deploy_model_api(port=8000)
+        返回:
+            fig: matplotlib图表对象
+        """
+        if self.model is None:
+            raise ValueError("模型尚未训练，请先调用fit方法")
+
+        # 创建图表
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # 使用xgboost的plot_tree函数
+        xgb.plot_tree(
+            self.model,
+            num_trees=tree_index,
+            rankdir=rankdir,
+            ax=ax
+        )
+
+        # 添加标题
+        ax.set_title(f'决策树 #{tree_index}', fontsize=14)
+
+        # 调整布局
+        plt.tight_layout()
+
+        return fig
+
+    def plot_learning_curve(self, metric='auto', figsize=(12, 6)):
+        """
+        绘制学习曲线
+
+        参数:
+            metric: 要绘制的指标
+            figsize: 图表大小
+
+        返回:
+            fig: matplotlib图表对象
+        """
+        if not self.training_history:
+            raise ValueError("没有训练历史数据")
+
+        # 创建图表
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # 如果未指定指标，根据任务类型选择默认指标
+        if metric == 'auto':
+            if self.task_type == 'classification':
+                if 'multi' in self.objective:
+                    if 'eval_0-mlogloss' in self.training_history:
+                        metric = 'mlogloss'
+                    else:
+                        metric = 'merror'
+                else:
+                    if 'eval_0-logloss' in self.training_history:
+                        metric = 'logloss'
+                    else:
+                        metric = 'error'
+            else:
+                if 'eval_0-rmse' in self.training_history:
+                    metric = 'rmse'
+                else:
+                    metric = 'mae'
+
+        # 收集所有指标
+        metrics_to_plot = []
+        for eval_key in self.training_history.keys():
+            for metric_key in self.training_history[eval_key].keys():
+                if metric in metric_key:
+                    metrics_to_plot.append((eval_key, metric_key))
+
+        # 绘制学习曲线
+        for eval_key, metric_key in metrics_to_plot:
+            values = self.training_history[eval_key][metric_key]
+            iterations = range(1, len(values) + 1)
+
+            ax.plot(iterations, values, label=f'{eval_key}-{metric_key}')
+
+        # 添加标题和标签
+        ax.set_title(f'学习曲线 ({metric})', fontsize=14)
+        ax.set_xlabel('迭代次数', fontsize=12)
+        ax.set_ylabel('指标值', fontsize=12)
+
+        # 添加网格和图例
+        ax.grid(True, linestyle='--', alpha=0.6)
+        ax.legend(loc='best')
+
+        # 调整布局
+        plt.tight_layout()
+
+        return fig
+
+    def plot_confusion_matrix(self, y_true, y_pred, labels=None, normalize=None,
+                              title='混淆矩阵', cmap=plt.cm.Blues, figsize=(10, 8)):
+        """
+        绘制混淆矩阵
+
+        参数:
+            y_true: 真实标签
+            y_pred: 预测标签
+            labels: 类别标签
+            normalize: 是否归一化，'true'、'pred'、'all'或None
+            title: 图表标题
+            cmap: 颜色映射
+            figsize: 图表大小
+
+        返回:
+            fig: matplotlib图表对象
+        """
+        if self.task_type != 'classification':
+            raise ValueError("混淆矩阵仅适用于分类任务")
+
+        # 计算混淆矩阵
+        cm = confusion_matrix(y_true, y_pred, labels=labels)
+
+        # 确定类别标签
+        if labels is None:
+            labels = np.unique(np.concatenate((y_true, y_pred)))
+
+        # 归一化
+        if normalize == 'true':
+            cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+            title = title + ' (按真实标签归一化)'
+        elif normalize == 'pred':
+            cm = cm.astype('float') / cm.sum(axis=0)[np.newaxis, :]
+            title = title + ' (按预测标签归一化)'
+        elif normalize == 'all':
+            cm = cm.astype('float') / cm.sum()
+            title = title + ' (全局归一化)'
+
+        # 创建图表
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # 显示混淆矩阵
+        im = ax.imshow(cm, interpolation='nearest', cmap=cmap)
+        plt.colorbar(im, ax=ax)
+
+        # 添加标题和轴标签
+        ax.set_title(title, fontsize=14)
+        ax.set_xlabel('预测标签', fontsize=12)
+        ax.set_ylabel('真实标签', fontsize=12)
+
+        # 设置刻度标签
+        tick_marks = np.arange(len(labels))
+        ax.set_xticks(tick_marks)
+        ax.set_yticks(tick_marks)
+        ax.set_xticklabels(labels)
+        ax.set_yticklabels(labels)
+
+        # 旋转x轴标签
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+
+        # 添加数值标签
+        fmt = '.2f' if normalize else 'd'
+        thresh = cm.max() / 2.
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                ax.text(j, i, format(cm[i, j], fmt),
+                        ha="center", va="center",
+                        color="white" if cm[i, j] > thresh else "black")
+
+        # 调整布局
+        fig.tight_layout()
+
+        return fig
+
+    def plot_roc_curve(self, y_true, y_prob, class_index=None, figsize=(10, 8)):
+        """
+        绘制ROC曲线
+
+        参数:
+            y_true: 真实标签
+            y_prob: 预测概率
+            class_index: 多分类问题中要绘制的类别索引
+            figsize: 图表大小
+
+        返回:
+            fig: matplotlib图表对象
+        """
+        if self.task_type != 'classification':
+            raise ValueError("ROC曲线仅适用于分类任务")
+
+        # 创建图表
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # 处理多分类
+        if 'multi' in self.objective:
+            if class_index is None:
+                # 为每个类别绘制ROC曲线
+                y_true_bin = label_binarize(y_true, classes=np.unique(y_true))
+                n_classes = y_true_bin.shape[1]
+
+                # 对每个类别计算ROC曲线和AUC
+                for i in range(n_classes):
+                    fpr, tpr, _ = roc_curve(y_true_bin[:, i], y_prob[:, i])
+                    roc_auc = auc(fpr, tpr)
+
+                    # 绘制ROC曲线
+                    ax.plot(fpr, tpr, lw=2,
+                            label=f'类别 {i} (AUC = {roc_auc:.3f})')
+            else:
+                # 绘制指定类别的ROC曲线
+                y_true_bin = label_binarize(y_true, classes=np.unique(y_true))
+
+                fpr, tpr, _ = roc_curve(y_true_bin[:, class_index], y_prob[:, class_index])
+                roc_auc = auc(fpr, tpr)
+
+                # 绘制ROC曲线
+                ax.plot(fpr, tpr, lw=2,
+                        label=f'类别 {class_index} (AUC = {roc_auc:.3f})')
+        else:
+            # 二分类
+            if isinstance(y_prob, np.ndarray) and len(y_prob.shape) > 1:
+                y_prob = y_prob[:, 1]
+
+            fpr, tpr, _ = roc_curve(y_true, y_prob)
+            roc_auc = auc(fpr, tpr)
+
+            # 绘制ROC曲线
+            ax.plot(fpr, tpr, lw=2,
+                    label=f'ROC曲线 (AUC = {roc_auc:.3f})')
+
+        # 绘制基准线
+        ax.plot([0, 1], [0, 1], 'k--', lw=2)
+
+        # 设置轴范围
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+
+        # 添加标题和标签
+        ax.set_title('接收者操作特征曲线', fontsize=14)
+        ax.set_xlabel('假正例率', fontsize=12)
+        ax.set_ylabel('真正例率', fontsize=12)
+
+        # 添加网格和图例
+        ax.grid(True, linestyle='--', alpha=0.6)
+        ax.legend(loc='lower right')
+
+        # 加载数据
+        from sklearn.datasets import load_breast_cancer
+        from sklearn.model_selection import train_test_split
+
+        data = load_breast_cancer()
+        X, y = pd.DataFrame(data.data, columns=data.feature_names), data.target
+
+        # 初始化并自动调优
+        model = SuperXGBoost(
+            task_type='classification',
+            gpu_acceleration=True,
+            experiment_tracking=True,
+            auto_feature_engineering=True
+        )
+
+        # 自动数据准备和特征工程
+        X_train, X_test, y_train, y_test = model.prepare_data(
+            X, y,
+            preprocessing=True,
+            feature_engineering=True,
+            handle_outliers=True
+        )
+
+        # 模型调优与训练
+        best_params = model.auto_tune(X_train, y_train, method='optuna', n_trials=50)
+        model.fit(X_train, y_train, eval_set=[(X_test, y_test)], early_stopping_rounds=20)
+
+        # 模型评估和解释
+        eval_results = model.evaluate(X_test, y_test)
+        model.explain_model(X_test)
+
+        # 保存与部署
+        model.save_model('super_xgboost_model.json')
+        model.save_report('model_report.md')
+        model.deploy_model_api(port=8000)
